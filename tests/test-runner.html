@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Content-Security-Policy"
+    content="default-src 'self'; style-src 'unsafe-inline' 'self'; script-src 'self' 'unsafe-inline';" />
+  <title>EcoTrack — Test Suite</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Courier New', Courier, monospace;
+      background: #050d05;
+      color: #f0fdf4;
+      padding: 2rem;
+      min-height: 100vh;
+    }
+    h1 { font-size: 2rem; font-weight: 800; color: #4ade80; margin-bottom: 0.5rem; }
+    .subtitle { color: rgba(240,253,244,0.5); margin-bottom: 2rem; font-size: 0.9rem; }
+
+    .summary {
+      display: flex;
+      gap: 1.5rem;
+      margin-bottom: 1.5rem;
+      padding: 1rem 1.5rem;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 12px;
+      flex-wrap: wrap;
+    }
+    .summary-item { display: flex; flex-direction: column; }
+    .summary-label { font-size: 0.75rem; color: rgba(240,253,244,0.5); text-transform: uppercase; }
+    .summary-value { font-size: 1.5rem; font-weight: 700; }
+    .passed  { color: #4ade80; }
+    .failed  { color: #f87171; }
+
+    .progress-bar {
+      height: 8px;
+      background: rgba(255,255,255,0.08);
+      border-radius: 99px;
+      overflow: hidden;
+      margin-bottom: 2rem;
+    }
+    .progress-fill {
+      height: 100%;
+      border-radius: 99px;
+      transition: width 0.5s ease;
+    }
+
+    .suite {
+      margin-bottom: 1.5rem;
+      background: rgba(255,255,255,0.03);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    .suite-header {
+      padding: 0.75rem 1rem;
+      background: rgba(255,255,255,0.05);
+      font-weight: 700;
+      font-size: 0.9rem;
+      color: #22d3ee;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .test-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 0.75rem;
+      padding: 0.5rem 1rem;
+      border-top: 1px solid rgba(255,255,255,0.04);
+      font-size: 0.85rem;
+    }
+    .test-icon { font-size: 1rem; flex-shrink: 0; margin-top: 2px; }
+    .test-name { flex: 1; color: rgba(240,253,244,0.8); line-height: 1.5; }
+    .test-error {
+      font-size: 0.78rem;
+      color: #f87171;
+      background: rgba(248,113,113,0.08);
+      border: 1px solid rgba(248,113,113,0.2);
+      padding: 0.3rem 0.6rem;
+      border-radius: 6px;
+      max-width: 450px;
+      word-break: break-word;
+    }
+
+    .run-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.75rem 2rem;
+      background: linear-gradient(135deg, #4ade80, #22d3ee);
+      color: #052e16;
+      font-weight: 700;
+      border: none;
+      border-radius: 99px;
+      cursor: pointer;
+      font-size: 1rem;
+      margin-bottom: 1.5rem;
+      transition: all 0.2s ease;
+    }
+    .run-btn:hover { transform: translateY(-2px); box-shadow: 0 4px 20px rgba(74,222,128,0.4); }
+    .run-btn:active { transform: translateY(0); }
+    .run-btn:focus-visible { outline: 2px solid #22d3ee; outline-offset: 3px; }
+
+    #results { display: none; }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 0.2rem 0.6rem;
+      border-radius: 99px;
+      font-size: 0.75rem;
+      font-weight: 700;
+    }
+    .badge-pass { background: rgba(74,222,128,0.15); color: #4ade80; }
+    .badge-fail { background: rgba(248,113,113,0.15); color: #f87171; }
+
+    footer {
+      margin-top: 3rem;
+      text-align: center;
+      color: rgba(240,253,244,0.3);
+      font-size: 0.8rem;
+      line-height: 1.6;
+    }
+
+    .all-pass-banner {
+      padding: 1rem 1.5rem;
+      background: rgba(74,222,128,0.1);
+      border: 1px solid rgba(74,222,128,0.3);
+      border-radius: 12px;
+      color: #4ade80;
+      font-weight: 700;
+      font-size: 1.1rem;
+      text-align: center;
+      margin-bottom: 1.5rem;
+    }
+  </style>
+</head>
+<body>
+
+  <h1>&#129514; EcoTrack Test Suite</h1>
+  <p class="subtitle">
+    Unit tests for the Carbon Footprint Calculation Engine &mdash; CarbonCalculator module<br/>
+    Zero external dependencies &middot; Vanilla JS test runner
+  </p>
+
+  <button class="run-btn" id="run-btn" onclick="runTests()" aria-label="Run all unit tests">
+    &#9654; Run All Tests
+  </button>
+
+  <div id="results" role="region" aria-label="Test results" aria-live="polite">
+    <div id="all-pass-banner" class="all-pass-banner" style="display:none;" role="status" aria-label="All tests passed">
+      &#127881; All tests passed! The calculation engine is working correctly.
+    </div>
+
+    <div class="summary" id="summary" aria-label="Test results summary">
+      <div class="summary-item">
+        <span class="summary-label">Total Tests</span>
+        <span class="summary-value" id="total">0</span>
+      </div>
+      <div class="summary-item">
+        <span class="summary-label">Passed</span>
+        <span class="summary-value passed" id="passed">0</span>
+      </div>
+      <div class="summary-item">
+        <span class="summary-label">Failed</span>
+        <span class="summary-value failed" id="failed">0</span>
+      </div>
+      <div class="summary-item">
+        <span class="summary-label">Pass Rate</span>
+        <span class="summary-value" id="rate">0%</span>
+      </div>
+      <div class="summary-item">
+        <span class="summary-label">Duration</span>
+        <span class="summary-value" id="duration">0ms</span>
+      </div>
+    </div>
+
+    <div class="progress-bar"
+      role="progressbar"
+      aria-label="Test pass rate"
+      aria-valuemin="0"
+      aria-valuemax="100"
+      id="prog-bar-wrap">
+      <div class="progress-fill" id="prog-bar" style="width:0%;"></div>
+    </div>
+
+    <div id="test-output" aria-label="Individual test results"></div>
+  </div>
+
+  <!-- Dependencies (same as main app) -->
+  <script src="../js/storage.js"></script>
+  <script src="../js/calculator.js"></script>
+
+  <!-- Test file (defines tests synchronously) -->
+  <script src="calculator.test.js"></script>
+
+  <script>
+    'use strict';
+
+    function escHtml(str) {
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    function runTests() {
+      var startTime = Date.now();
+
+      // Get results from the test file (already ran on script load)
+      var results = TestRunner.getResults();
+
+      if (!results || results.length === 0) {
+        document.getElementById('test-output').innerHTML =
+          '<p style="color:#f87171;padding:1rem;">No tests found. Make sure calculator.test.js loaded correctly.</p>';
+        document.getElementById('results').style.display = 'block';
+        return;
+      }
+
+      var duration = Date.now() - startTime;
+      var passedCount = results.filter(function (r) { return r.passed; }).length;
+      var failedCount = results.length - passedCount;
+      var passRate = results.length > 0 ? Math.round((passedCount / results.length) * 100) : 0;
+
+      // Update summary stats
+      document.getElementById('total').textContent = results.length;
+      document.getElementById('passed').textContent = passedCount;
+      document.getElementById('failed').textContent = failedCount;
+      document.getElementById('rate').textContent = passRate + '%';
+      document.getElementById('duration').textContent = duration + 'ms';
+
+      // Progress bar color
+      var bar = document.getElementById('prog-bar');
+      bar.style.width = passRate + '%';
+      if (passRate === 100) {
+        bar.style.background = 'linear-gradient(135deg, #4ade80, #22d3ee)';
+      } else if (passRate >= 80) {
+        bar.style.background = 'linear-gradient(135deg, #fbbf24, #fb923c)';
+      } else {
+        bar.style.background = 'linear-gradient(135deg, #f87171, #ef4444)';
+      }
+      document.getElementById('prog-bar-wrap').setAttribute('aria-valuenow', passRate);
+
+      // All-pass banner
+      if (passedCount === results.length) {
+        document.getElementById('all-pass-banner').style.display = 'block';
+      }
+
+      // Group by test suite
+      var suites = {};
+      results.forEach(function (r) {
+        if (!suites[r.suite]) { suites[r.suite] = []; }
+        suites[r.suite].push(r);
+      });
+
+      // Render results HTML
+      var html = '';
+      Object.keys(suites).forEach(function (suiteName) {
+        var suiteTests = suites[suiteName];
+        var suitePassed = suiteTests.filter(function (t) { return t.passed; }).length;
+        var suiteAll = suiteTests.length;
+        var allOk = suitePassed === suiteAll;
+
+        html += '<section class="suite" aria-label="Test suite: ' + escHtml(suiteName) + '">';
+        html += '<div class="suite-header">';
+        html += '<span>' + escHtml(suiteName) + '</span>';
+        html += '<span class="badge ' + (allOk ? 'badge-pass' : 'badge-fail') + '">' + suitePassed + '/' + suiteAll + '</span>';
+        html += '</div>';
+
+        suiteTests.forEach(function (test) {
+          html += '<div class="test-row" role="listitem">';
+          html += '<span class="test-icon" aria-hidden="true">' + (test.passed ? '&#9989;' : '&#10060;') + '</span>';
+          html += '<span class="test-name">' + escHtml(test.name) + '</span>';
+          if (test.error) {
+            html += '<span class="test-error" role="alert">' + escHtml(test.error) + '</span>';
+          }
+          html += '</div>';
+        });
+
+        html += '</section>';
+      });
+
+      document.getElementById('test-output').innerHTML = html;
+      document.getElementById('results').style.display = 'block';
+
+      // Log summary to console for automated CI inspection
+      console.log('[EcoTrack Tests] Total: ' + results.length + ', Passed: ' + passedCount + ', Failed: ' + failedCount + ', Rate: ' + passRate + '%');
+    }
+
+    // Auto-run immediately after all scripts load
+    window.addEventListener('load', function () {
+      runTests();
+    });
+  </script>
+
+  <footer>
+    <strong>EcoTrack</strong> Carbon Footprint Platform &middot; Unit Test Suite<br/>
+    Emission factors from IPCC AR6, US EPA, and UK DEFRA 2023<br/>
+    All tests run in-browser with zero external frameworks
+  </footer>
+
+</body>
+</html>
