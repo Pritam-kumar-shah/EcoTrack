@@ -3,7 +3,7 @@
 > **PROMPTWAR Challenge 3** | Smart, dynamic assistant for understanding, tracking, and reducing your personal carbon footprint.
 
 [![Live Demo](https://img.shields.io/badge/Demo-Open%20index.html-4ade80?style=flat-square)](index.html)
-[![Tests](https://img.shields.io/badge/Tests-25%2B%20Unit%20Tests-22d3ee?style=flat-square)](tests/test-runner.html)
+[![Tests](https://img.shields.io/badge/Tests-59%20Unit%20Tests-22d3ee?style=flat-square)](tests/test-runner.html)
 [![License](https://img.shields.io/badge/License-MIT-c084fc?style=flat-square)](LICENSE)
 [![Size](https://img.shields.io/badge/Repo%20Size-%3C%2010%20MB-fbbf24?style=flat-square)](.)
 
@@ -153,7 +153,7 @@ All emission factors are sourced from peer-reviewed, government-published data:
 2. Tests auto-run on page load
 3. Or click **▶ Run All Tests**
 
-### Test Coverage (25+ Tests)
+### Test Coverage (55+ Tests)
 
 ```
 CarbonCalculator.calculateTransport     7 tests
@@ -166,8 +166,11 @@ CarbonCalculator.calculateScore         3 tests
 CarbonCalculator.getRating              3 tests
 CarbonCalculator.calculateOffset        3 tests
 CarbonCalculator.compareToBaselines     3 tests
+CarbonStorage                           5 tests
+CarbonInsights                          2 tests
+CarbonGamification                      4 tests
                                        ────────
-Total                                  41 tests
+Total                                  59 tests
 ```
 
 ### Test Methodology

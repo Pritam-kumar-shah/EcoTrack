@@ -21,7 +21,7 @@
 
   --color-text-primary:    #f0fdf4;
   --color-text-secondary:  rgba(240, 253, 244, 0.70);
-  --color-text-muted:      rgba(240, 253, 244, 0.40);
+  --color-text-muted:      rgba(240, 253, 244, 0.60);
   --color-text-accent:     #4ade80;
 
   /* Gradients */
@@ -82,12 +82,11 @@
 .light-theme {
   --color-bg-primary:     #f0fdf4;
   --color-bg-secondary:   #dcfce7;
-  --color-bg-card:        rgba(0, 0, 0, 0.03);
   --color-glass-border:   rgba(0, 0, 0, 0.08);
   --color-glass-shadow:   rgba(0, 0, 0, 0.15);
   --color-text-primary:   #052e16;
   --color-text-secondary: rgba(5, 46, 22, 0.70);
-  --color-text-muted:     rgba(5, 46, 22, 0.40);
+  --color-text-muted:     rgba(5, 46, 22, 0.60);
   --gradient-hero:        linear-gradient(135deg, #dcfce7 0%, #d1fae5 50%, #ecfdf5 100%);
   --color-bg-card:        rgba(255,255,255,0.60);
   --shadow-card:          0 4px 24px rgba(0,0,0,0.08), 0 1px 0 rgba(255,255,255,0.8) inset;
@@ -142,6 +141,14 @@ body {
 }
 
 /* Focus styles — WCAG 2.1 AA */
+:focus {
+  outline: 2px solid var(--color-accent-teal);
+  outline-offset: 3px;
+  border-radius: var(--radius-sm);
+}
+:focus:not(:focus-visible) {
+  outline: none;
+}
 :focus-visible {
   outline: 2px solid var(--color-accent-teal);
   outline-offset: 3px;
@@ -1181,7 +1188,8 @@ body {
   font-weight: 800;
   font-size: 13px;
 }
-.action-checkbox:focus { outline: 2px solid var(--color-accent-teal); outline-offset: 2px; }
+.action-checkbox:focus { outline: none; }
+.action-checkbox:focus-visible { outline: 2px solid var(--color-accent-teal); outline-offset: 2px; }
 .action-text { display: flex; flex-direction: column; gap: 2px; }
 .action-title { font-weight: 600; font-size: var(--text-sm); }
 .action-item-done .action-title { text-decoration: line-through; color: var(--color-text-muted); }

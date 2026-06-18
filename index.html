@@ -37,7 +37,7 @@
   <header class="app-header" role="banner">
     <div class="header-inner">
       <!-- Logo -->
-      <a href="#" class="logo" aria-label="EcoTrack Home" onclick="CarbonApp.navigateTo('home'); return false;">
+      <a href="#" class="logo logo-link" aria-label="EcoTrack Home">
         <span class="logo-icon" aria-hidden="true">🌍</span>
         <span class="logo-text">Eco<span class="logo-accent">Track</span></span>
       </a>
@@ -103,7 +103,7 @@
             <button id="btn-start-calculator" class="btn-primary btn-large" aria-label="Start carbon footprint calculator">
               <span aria-hidden="true">🧮</span> Calculate My Footprint
             </button>
-            <button class="btn-ghost btn-large" onclick="CarbonApp.navigateTo('actions')" aria-label="View eco-actions">
+            <button id="btn-take-action-cta" class="btn-ghost btn-large" aria-label="View eco-actions">
               <span aria-hidden="true">✅</span> Take Action Now
             </button>
           </div>
@@ -807,7 +807,7 @@
           <div class="empty-icon" aria-hidden="true">📊</div>
           <h2 class="empty-title">No Data Yet</h2>
           <p class="empty-desc">Complete your first carbon footprint calculation to start tracking your progress.</p>
-          <button class="btn-primary" onclick="CarbonApp.navigateTo('calculator')" aria-label="Go to calculator">
+          <button id="btn-progress-cta" class="btn-primary" aria-label="Go to calculator">
             Calculate Now →
           </button>
         </div>

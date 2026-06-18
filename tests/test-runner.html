@@ -146,7 +146,7 @@
     Zero external dependencies &middot; Vanilla JS test runner
   </p>
 
-  <button class="run-btn" id="run-btn" onclick="runTests()" aria-label="Run all unit tests">
+  <button class="run-btn" id="run-btn" aria-label="Run all unit tests">
     &#9654; Run All Tests
   </button>
 
@@ -193,9 +193,14 @@
   <!-- Dependencies (same as main app) -->
   <script src="../js/storage.js"></script>
   <script src="../js/calculator.js"></script>
+  <script src="../js/insights.js"></script>
+  <script src="../js/gamification.js"></script>
 
-  <!-- Test file (defines tests synchronously) -->
+  <!-- Test files (define tests synchronously) -->
   <script src="calculator.test.js"></script>
+  <script src="storage.test.js"></script>
+  <script src="insights.test.js"></script>
+  <script src="gamification.test.js"></script>
 
   <script>
     'use strict';
@@ -294,6 +299,11 @@
     // Auto-run immediately after all scripts load
     window.addEventListener('load', function () {
       runTests();
+
+      const runBtn = document.getElementById('run-btn');
+      if (runBtn) {
+        runBtn.addEventListener('click', runTests);
+      }
     });
   </script>
 
