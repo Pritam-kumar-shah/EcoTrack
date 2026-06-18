@@ -1,20 +1,59 @@
 /**
  * @fileoverview Secure localStorage manager for Carbon Footprint Platform.
  * Handles data persistence with schema validation, sanitization, and error handling.
- * @version 1.0.0
+ * @version 2.0.0
  */
 
-var CarbonStorage = (function () {
+/**
+ * @typedef {Object} CalculationData
+ * @property {number} id - Unique identifier (timestamp-based).
+ * @property {string} date - ISO 8601 date string of when the calculation was recorded.
+ * @property {number} total - Total carbon footprint value, rounded to 2 decimals.
+ * @property {Object<string, number>} breakdown - Category-level breakdown (e.g. { transport: 12.5, energy: 8.3 }).
+ * @property {number} timestamp - Unix timestamp in milliseconds.
+ */
+
+/**
+ * @typedef {Object} ProfileData
+ * @property {string} name - User display name.
+ * @property {string|null} joinDate - ISO 8601 date string of account creation, or null if unset.
+ * @property {number} totalCalculations - Lifetime count of calculations performed.
+ */
+
+/**
+ * @typedef {Object} SettingsData
+ * @property {string} theme - UI theme ('dark' | 'light').
+ * @property {string} unit - Measurement unit ('kg' | 'lb').
+ * @property {string} country - ISO 3166-1 alpha-2 country code.
+ * @property {boolean} notifications - Whether push/in-app notifications are enabled.
+ */
+
+const CarbonStorage = (function () {
   'use strict';
 
   /** Storage key prefix to avoid collisions */
-  var PREFIX = 'cfp_v1_';
+  const PREFIX = 'cfp_v1_';
 
   /** Maximum allowed size for a single storage entry (50 KB) */
-  var MAX_ENTRY_SIZE = 50 * 1024;
+  const MAX_ENTRY_SIZE = 50 * 1024;
+
+  /** Maximum recursion depth for sanitizeDeep */
+  const MAX_SANITIZE_DEPTH = 10;
+
+  /** Maximum number of object keys allowed after sanitization */
+  const MAX_OBJECT_KEYS = 100;
+
+  /** Maximum number of array items allowed after sanitization */
+  const MAX_ARRAY_ITEMS = 1000;
+
+  /** Maximum string length after sanitization */
+  const MAX_STRING_LENGTH = 500;
+
+  /** Cached result of the localStorage availability probe */
+  let storageAvailableCache = null;
 
   /** Schema definitions for each stored entity */
-  var SCHEMAS = {
+  const SCHEMAS = {
     calculations: {
       type: 'array',
       maxItems: 52, // 1 year of weekly records
@@ -45,6 +84,32 @@ var CarbonStorage = (function () {
   };
 
   /**
+   * Properties that must never be merged from untrusted input
+   * to prevent prototype pollution.
+   * @type {ReadonlySet<string>}
+   */
+  const BANNED_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
+  /**
+   * Shallow-merges `source` into `target`, skipping keys that could
+   * cause prototype pollution.
+   * @param {Object} target - Object to merge into (mutated in place).
+   * @param {Object} source - Sanitized source object.
+   * @returns {Object} The mutated `target`.
+   */
+  function safeMerge(target, source) {
+    if (!source || typeof source !== 'object') return target;
+    const keys = Object.keys(source);
+    for (let i = 0; i < keys.length; i++) {
+      const key = keys[i];
+      if (!BANNED_KEYS.has(key)) {
+        target[key] = source[key];
+      }
+    }
+    return target;
+  }
+
+  /**
    * Sanitizes a string value to prevent XSS.
    * @param {string} str - Input string to sanitize.
    * @returns {string} Sanitized string.
@@ -58,7 +123,7 @@ var CarbonStorage = (function () {
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&#x27;')
       .replace(/\//g, '&#x2F;')
-      .substring(0, 500); // Max string length
+      .substring(0, MAX_STRING_LENGTH);
   }
 
   /**
@@ -76,12 +141,12 @@ var CarbonStorage = (function () {
   /**
    * Sanitizes a deep object, removing any script injection attempts.
    * @param {*} obj - Object to sanitize.
-   * @param {number} depth - Current recursion depth.
+   * @param {number} [depth=0] - Current recursion depth.
    * @returns {*} Sanitized object.
    */
   function sanitizeDeep(obj, depth) {
-    depth = depth || 0;
-    if (depth > 10) return null; // Prevent deep recursion attacks
+    const currentDepth = depth || 0;
+    if (currentDepth > MAX_SANITIZE_DEPTH) return null; // Prevent deep recursion attacks
 
     if (typeof obj === 'string') return sanitizeString(obj);
     if (typeof obj === 'number') {
@@ -92,20 +157,22 @@ var CarbonStorage = (function () {
     if (obj === null || obj === undefined) return null;
 
     if (Array.isArray(obj)) {
-      return obj.slice(0, 1000).map(function (item) {
-        return sanitizeDeep(item, depth + 1);
+      return obj.slice(0, MAX_ARRAY_ITEMS).map(function (item) {
+        return sanitizeDeep(item, currentDepth + 1);
       });
     }
 
     if (typeof obj === 'object') {
-      var clean = {};
-      var keys = Object.keys(obj).slice(0, 100); // Max 100 keys
-      keys.forEach(function (key) {
-        var safeKey = sanitizeString(key);
+      const clean = Object.create(null);
+      const keys = Object.keys(obj).slice(0, MAX_OBJECT_KEYS);
+      for (let i = 0; i < keys.length; i++) {
+        const key = keys[i];
+        if (BANNED_KEYS.has(key)) continue;
+        const safeKey = sanitizeString(key);
         if (safeKey) {
-          clean[safeKey] = sanitizeDeep(obj[key], depth + 1);
+          clean[safeKey] = sanitizeDeep(obj[key], currentDepth + 1);
         }
-      });
+      }
       return clean;
     }
 
@@ -113,18 +180,22 @@ var CarbonStorage = (function () {
   }
 
   /**
-   * Checks if localStorage is available.
+   * Checks if localStorage is available. The result is cached after
+   * the first successful probe so subsequent calls avoid redundant I/O.
    * @returns {boolean} Whether localStorage is available.
    */
   function isStorageAvailable() {
+    if (storageAvailableCache !== null) return storageAvailableCache;
+
     try {
-      var test = '__cfp_test__';
-      localStorage.setItem(test, '1');
-      localStorage.removeItem(test);
-      return true;
+      const testKey = '__cfp_test__';
+      localStorage.setItem(testKey, '1');
+      localStorage.removeItem(testKey);
+      storageAvailableCache = true;
     } catch (e) {
-      return false;
+      storageAvailableCache = false;
     }
+    return storageAvailableCache;
   }
 
   /**
@@ -144,20 +215,17 @@ var CarbonStorage = (function () {
    */
   function save(key, data) {
     if (!isStorageAvailable()) {
-      console.warn('[CarbonStorage] localStorage not available');
       return false;
     }
 
-    var schema = SCHEMAS[key];
+    const schema = SCHEMAS[key];
     if (!schema) {
-      console.warn('[CarbonStorage] Unknown key:', key);
       return false;
     }
 
-    var sanitized = sanitizeDeep(data);
+    let sanitized = sanitizeDeep(data);
 
     if (!validateType(sanitized, schema.type)) {
-      console.warn('[CarbonStorage] Type mismatch for key:', key);
       return false;
     }
 
@@ -166,9 +234,8 @@ var CarbonStorage = (function () {
     }
 
     try {
-      var serialized = JSON.stringify(sanitized);
+      const serialized = JSON.stringify(sanitized);
       if (serialized.length > MAX_ENTRY_SIZE) {
-        console.warn('[CarbonStorage] Data too large for key:', key);
         return false;
       }
       localStorage.setItem(getKey(key), serialized);
@@ -180,12 +247,10 @@ var CarbonStorage = (function () {
         try {
           localStorage.setItem(getKey(key), JSON.stringify(sanitized));
           return true;
-        } catch (e2) {
-          console.error('[CarbonStorage] Storage quota exceeded');
+        } catch (_retryError) {
           return false;
         }
       }
-      console.error('[CarbonStorage] Save error:', e.message);
       return false;
     }
   }
@@ -198,25 +263,23 @@ var CarbonStorage = (function () {
   function load(key) {
     if (!isStorageAvailable()) return getDefault(key);
 
-    var schema = SCHEMAS[key];
+    const schema = SCHEMAS[key];
     if (!schema) return null;
 
     try {
-      var raw = localStorage.getItem(getKey(key));
+      const raw = localStorage.getItem(getKey(key));
       if (raw === null) return getDefault(key);
 
-      var parsed = JSON.parse(raw);
-      var sanitized = sanitizeDeep(parsed);
+      const parsed = JSON.parse(raw);
+      const sanitized = sanitizeDeep(parsed);
 
       if (!validateType(sanitized, schema.type)) {
-        console.warn('[CarbonStorage] Corrupted data for key:', key, '- resetting');
         remove(key);
         return getDefault(key);
       }
 
       return sanitized;
     } catch (e) {
-      console.error('[CarbonStorage] Load error for key:', key, e.message);
       remove(key);
       return getDefault(key);
     }
@@ -224,13 +287,14 @@ var CarbonStorage = (function () {
 
   /**
    * Gets the default value for a schema key.
+   * Uses safeMerge instead of Object.assign to prevent prototype pollution.
    * @param {string} key - Schema key.
    * @returns {*} Default value.
    */
   function getDefault(key) {
-    var schema = SCHEMAS[key];
+    const schema = SCHEMAS[key];
     if (!schema) return null;
-    if (schema.defaults) return Object.assign({}, schema.defaults);
+    if (schema.defaults) return safeMerge({}, schema.defaults);
     if (schema.type === 'array') return [];
     if (schema.type === 'object') return {};
     return null;
@@ -244,26 +308,54 @@ var CarbonStorage = (function () {
     if (!isStorageAvailable()) return;
     try {
       localStorage.removeItem(getKey(key));
-    } catch (e) {
-      console.error('[CarbonStorage] Remove error:', e.message);
+    } catch (_e) {
+      // Removal failed — silently ignore; nothing useful to surface.
     }
+  }
+
+  /**
+   * Validates that a breakdown object contains only string keys mapping to
+   * finite numbers. Returns a clean copy or an empty object.
+   * @param {*} breakdown - Raw breakdown value.
+   * @returns {Object<string, number>} Validated breakdown.
+   */
+  function validateBreakdown(breakdown) {
+    if (!breakdown || typeof breakdown !== 'object' || Array.isArray(breakdown)) {
+      return {};
+    }
+    const clean = {};
+    const keys = Object.keys(breakdown);
+    for (let i = 0; i < keys.length; i++) {
+      const key = keys[i];
+      if (BANNED_KEYS.has(key)) continue;
+      const value = breakdown[key];
+      if (typeof value === 'number' && isFinite(value)) {
+        clean[sanitizeString(key)] = value;
+      }
+    }
+    return clean;
   }
 
   /**
    * Saves a calculation record to history.
    * @param {Object} calculation - Calculation result object.
+   * @param {number} calculation.total - Total carbon footprint value.
+   * @param {Object<string, number>} [calculation.breakdown] - Category breakdown.
    * @returns {boolean} Success status.
    */
   function saveCalculation(calculation) {
-    if (!calculation || typeof calculation.total !== 'number') return false;
+    if (!calculation || typeof calculation.total !== 'number' || !isFinite(calculation.total)) {
+      return false;
+    }
 
-    var calculations = load('calculations');
+    const now = Date.now();
+    const calculations = load('calculations');
     calculations.push({
-      id: Date.now(),
+      id: now,
       date: new Date().toISOString(),
       total: Math.round(calculation.total * 100) / 100,
-      breakdown: calculation.breakdown || {},
-      timestamp: Date.now(),
+      breakdown: validateBreakdown(calculation.breakdown),
+      timestamp: now,
     });
 
     return save('calculations', calculations);
@@ -271,7 +363,7 @@ var CarbonStorage = (function () {
 
   /**
    * Gets all stored calculations.
-   * @returns {Array} Array of calculation records.
+   * @returns {CalculationData[]} Array of calculation records.
    */
   function getCalculations() {
     return load('calculations');
@@ -284,8 +376,9 @@ var CarbonStorage = (function () {
    * @returns {boolean} Success status.
    */
   function saveAction(actionId, completed) {
-    var actions = load('actions');
-    var safeId = sanitizeString(String(actionId));
+    if (actionId == null) return false;
+    const actions = load('actions');
+    const safeId = sanitizeString(String(actionId));
     if (safeId) {
       actions[safeId] = Boolean(completed);
     }
@@ -294,7 +387,7 @@ var CarbonStorage = (function () {
 
   /**
    * Gets all saved actions.
-   * @returns {Object} Map of actionId to completed state.
+   * @returns {Object<string, boolean>} Map of actionId to completed state.
    */
   function getActions() {
     return load('actions');
@@ -306,8 +399,9 @@ var CarbonStorage = (function () {
    * @returns {boolean} Success status.
    */
   function earnBadge(badgeId) {
-    var badges = load('badges');
-    var safeId = sanitizeString(String(badgeId));
+    if (badgeId == null) return false;
+    const badges = load('badges');
+    const safeId = sanitizeString(String(badgeId));
     if (safeId && !badges[safeId]) {
       badges[safeId] = {
         earned: true,
@@ -328,13 +422,13 @@ var CarbonStorage = (function () {
 
   /**
    * Gets or updates user settings.
-   * @param {Object|null} updates - Settings to update, or null to just get.
-   * @returns {Object} Current settings.
+   * @param {SettingsData|null} updates - Settings to update, or null to just get.
+   * @returns {SettingsData} Current settings.
    */
   function settings(updates) {
-    var current = load('settings');
+    const current = load('settings');
     if (updates && typeof updates === 'object') {
-      Object.assign(current, sanitizeDeep(updates));
+      safeMerge(current, sanitizeDeep(updates));
       save('settings', current);
     }
     return current;
@@ -342,17 +436,17 @@ var CarbonStorage = (function () {
 
   /**
    * Gets or updates user profile.
-   * @param {Object|null} updates - Profile updates, or null to just get.
-   * @returns {Object} Current profile.
+   * @param {ProfileData|null} updates - Profile updates, or null to just get.
+   * @returns {ProfileData} Current profile.
    */
   function profile(updates) {
-    var current = load('profile');
+    const current = load('profile');
     if (!current.joinDate) {
       current.joinDate = new Date().toISOString();
       save('profile', current);
     }
     if (updates && typeof updates === 'object') {
-      Object.assign(current, sanitizeDeep(updates));
+      safeMerge(current, sanitizeDeep(updates));
       save('profile', current);
     }
     return current;
@@ -362,7 +456,7 @@ var CarbonStorage = (function () {
    * Prunes old calculation records to free space.
    */
   function pruneOldData() {
-    var calculations = load('calculations');
+    const calculations = load('calculations');
     if (calculations.length > 12) {
       save('calculations', calculations.slice(-12));
     }
@@ -373,10 +467,10 @@ var CarbonStorage = (function () {
    * @returns {boolean} Success status.
    */
   function clearAll() {
-    var keys = Object.keys(SCHEMAS);
-    keys.forEach(function (key) {
-      remove(key);
-    });
+    const keys = Object.keys(SCHEMAS);
+    for (let i = 0; i < keys.length; i++) {
+      remove(keys[i]);
+    }
     return true;
   }
 
@@ -385,10 +479,11 @@ var CarbonStorage = (function () {
    * @returns {Object} All stored data.
    */
   function exportData() {
-    var result = {};
-    Object.keys(SCHEMAS).forEach(function (key) {
-      result[key] = load(key);
-    });
+    const result = {};
+    const keys = Object.keys(SCHEMAS);
+    for (let i = 0; i < keys.length; i++) {
+      result[keys[i]] = load(keys[i]);
+    }
     return result;
   }
 

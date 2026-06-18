@@ -2,14 +2,88 @@
  * @fileoverview Canvas-based chart rendering for Carbon Footprint Platform.
  * Provides ring charts, bar charts, trend lines, and comparison charts.
  * Uses only native Canvas API — no external dependencies.
- * @version 1.0.0
+ * @version 2.0.0
+ */
+
+/**
+ * @typedef {Object} CanvasContextInfo
+ * @property {CanvasRenderingContext2D} ctx - The 2D rendering context.
+ * @property {number} width  - CSS width of the canvas (before DPR scaling).
+ * @property {number} height - CSS height of the canvas (before DPR scaling).
  */
 
 var CarbonCharts = (function () {
   'use strict';
 
+  // ─── Animation frame constants ───────────────────────────────────────
+  /** @constant {number} Number of frames for the score ring animation. */
+  const SCORE_RING_FRAMES = 60;
+  /** @constant {number} Number of frames for the category bars animation. */
+  const CATEGORY_BARS_FRAMES = 50;
+  /** @constant {number} Number of frames for the comparison chart animation. */
+  const COMPARISON_FRAMES = 55;
+  /** @constant {number} Number of frames for the trend line animation. */
+  const TREND_LINE_FRAMES = 60;
+  /** @constant {number} Number of frames for the donut chart animation. */
+  const DONUT_FRAMES = 50;
+
+  // ─── Active animation IDs (one per canvas) ───────────────────────────
+  /**
+   * Maps canvas element IDs to their active requestAnimationFrame handle
+   * so that a new draw call can cancel any in-flight animation first.
+   * @type {Object<string, number>}
+   */
+  const _activeAnimations = {};
+
+  // ─── Shared utilities ────────────────────────────────────────────────
+
+  /**
+   * Cubic ease-out function shared by every animated chart.
+   * @param {number} t - Normalised progress in the range [0, 1].
+   * @returns {number} Eased value in the range [0, 1].
+   */
+  function easeOut(t) {
+    return 1 - Math.pow(1 - t, 3);
+  }
+
+  /**
+   * Generic animation driver that replaces the duplicated
+   * animFrame / totalFrames / requestAnimationFrame boilerplate.
+   *
+   * @param {string}   canvasId    - Canvas element ID (used to track / cancel
+   *                                  overlapping animations on the same canvas).
+   * @param {function(number): void} drawCallback - Called every frame with a
+   *                                  normalised progress value in [0, 1].
+   * @param {number}   totalFrames - Total number of frames for the animation.
+   */
+  function animateChart(canvasId, drawCallback, totalFrames) {
+    // Cancel any animation already running on this canvas
+    if (_activeAnimations[canvasId]) {
+      cancelAnimationFrame(_activeAnimations[canvasId]);
+      _activeAnimations[canvasId] = 0;
+    }
+
+    let frame = 0;
+
+    /** @private Advances one frame and schedules the next if needed. */
+    function step() {
+      frame++;
+      const progress = Math.min(frame / totalFrames, 1);
+      drawCallback(progress);
+      if (frame < totalFrames) {
+        _activeAnimations[canvasId] = requestAnimationFrame(step);
+      } else {
+        _activeAnimations[canvasId] = 0;
+      }
+    }
+
+    _activeAnimations[canvasId] = requestAnimationFrame(step);
+  }
+
+  // ─── Constants ───────────────────────────────────────────────────────
+
   /** Default chart colors */
-  var COLORS = {
+  const COLORS = {
     transport: '#22d3ee',
     flights: '#f87171',
     energy: '#fbbf24',
@@ -24,13 +98,15 @@ var CarbonCharts = (function () {
   /**
    * Category display names.
    */
-  var CATEGORY_NAMES = {
+  const CATEGORY_NAMES = {
     transport: 'Transport',
     flights: 'Flights',
     energy: 'Home Energy',
     diet: 'Diet',
     shopping: 'Shopping',
   };
+
+  // ─── Canvas helpers ──────────────────────────────────────────────────
 
   /**
    * Polyfill for CanvasRenderingContext2D.roundRect (not available in all browsers).
@@ -43,7 +119,7 @@ var CarbonCharts = (function () {
    * @param {number|Array} radii - Corner radius or array of radii.
    */
   function roundRectPath(ctx, x, y, w, h, radii) {
-    var r;
+    let r;
     if (Array.isArray(radii)) {
       r = radii[0] || 0;
     } else {
@@ -84,15 +160,15 @@ var CarbonCharts = (function () {
   /**
    * Resolves a canvas ID to a context, with DPR scaling for crisp rendering.
    * @param {string} canvasId - The canvas element ID.
-   * @returns {{ctx: CanvasRenderingContext2D, width: number, height: number}|null}
+   * @returns {CanvasContextInfo|null}
    */
   function getContext(canvasId) {
-    var canvas = document.getElementById(canvasId);
+    const canvas = document.getElementById(canvasId);
     if (!canvas) return null;
 
-    var ctx = canvas.getContext('2d');
-    var dpr = window.devicePixelRatio || 1;
-    var rect = canvas.getBoundingClientRect();
+    const ctx = canvas.getContext('2d');
+    const dpr = window.devicePixelRatio || 1;
+    const rect = canvas.getBoundingClientRect();
 
     // Only resize if needed
     if (canvas.width !== rect.width * dpr || canvas.height !== rect.height * dpr) {
@@ -104,6 +180,8 @@ var CarbonCharts = (function () {
     return { ctx: ctx, width: rect.width, height: rect.height };
   }
 
+  // ─── Chart functions ─────────────────────────────────────────────────
+
   /**
    * Draws an animated ring/donut chart showing overall score.
    * @param {string} canvasId - Canvas element ID.
@@ -112,29 +190,27 @@ var CarbonCharts = (function () {
    * @param {number} [totalKg] - Total kg CO2e for display.
    */
   function drawScoreRing(canvasId, score, rating, totalKg) {
-    var c = getContext(canvasId);
+    const c = getContext(canvasId);
     if (!c) return;
 
-    var ctx = c.ctx;
-    var W = c.width;
-    var H = c.height;
-    var cx = W / 2;
-    var cy = H / 2;
-    var radius = Math.min(W, H) * 0.38;
-    var lineWidth = radius * 0.22;
+    const ctx = c.ctx;
+    const W = c.width;
+    const H = c.height;
+    const cx = W / 2;
+    const cy = H / 2;
+    const radius = Math.min(W, H) * 0.38;
+    const lineWidth = radius * 0.22;
 
     // Animate from 0 to target
-    var targetAngle = ((score / 100) * Math.PI * 1.5); // 270° sweep max
-    var currentAngle = 0;
-    var startAngle = Math.PI * 0.75; // Start at bottom-left
-    var animFrames = 60;
-    var frame = 0;
+    const targetAngle = ((score / 100) * Math.PI * 1.5); // 270° sweep max
+    const startAngle = Math.PI * 0.75; // Start at bottom-left
 
-    function easeOut(t) {
-      return 1 - Math.pow(1 - t, 3);
-    }
-
-    function draw(angle) {
+    /**
+     * Renders one frame of the score ring at the given arc angle.
+     * @param {number} angle - Current sweep angle in radians.
+     * @param {number} frameProgress - Normalised progress [0, 1].
+     */
+    function draw(angle, frameProgress) {
       ctx.clearRect(0, 0, W, H);
 
       // Background ring (track)
@@ -147,7 +223,7 @@ var CarbonCharts = (function () {
 
       if (angle > 0) {
         // Score ring
-        var grad = ctx.createLinearGradient(cx - radius, cy, cx + radius, cy);
+        const grad = ctx.createLinearGradient(cx - radius, cy, cx + radius, cy);
         grad.addColorStop(0, rating.color || '#4ade80');
         grad.addColorStop(1, '#22d3ee');
         ctx.beginPath();
@@ -172,8 +248,8 @@ var CarbonCharts = (function () {
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
 
-        var displayKg = Math.round(totalKg * (angle / (Math.PI * 1.5)) * (score > 0 ? 1 : 0));
-        if (frame >= animFrames) displayKg = totalKg;
+        let displayKg = Math.round(totalKg * (angle / (Math.PI * 1.5)) * (score > 0 ? 1 : 0));
+        if (frameProgress >= 1) displayKg = totalKg;
 
         ctx.font = 'bold ' + Math.round(radius * 0.38) + 'px Outfit, Inter, sans-serif';
         ctx.fillStyle = COLORS.textPrimary;
@@ -185,17 +261,10 @@ var CarbonCharts = (function () {
       }
     }
 
-    function animate() {
-      frame++;
-      var progress = Math.min(frame / animFrames, 1);
-      currentAngle = easeOut(progress) * targetAngle;
-      draw(currentAngle);
-      if (frame < animFrames) {
-        requestAnimationFrame(animate);
-      }
-    }
-
-    animate();
+    animateChart(canvasId, function (progress) {
+      const currentAngle = easeOut(progress) * targetAngle;
+      draw(currentAngle, progress);
+    }, SCORE_RING_FRAMES);
   }
 
   /**
@@ -205,34 +274,33 @@ var CarbonCharts = (function () {
    * @param {number} total - Total kg CO2e.
    */
   function drawCategoryBars(canvasId, breakdown, total) {
-    var c = getContext(canvasId);
+    const c = getContext(canvasId);
     if (!c) return;
 
-    var ctx = c.ctx;
-    var W = c.width;
-    var H = c.height;
+    const ctx = c.ctx;
+    const W = c.width;
+    const H = c.height;
 
-    var categories = Object.keys(breakdown);
-    var padding = { top: 16, bottom: 16, left: 90, right: 60 };
-    var barHeight = Math.min(28, (H - padding.top - padding.bottom) / categories.length - 10);
-    var barSpacing = (H - padding.top - padding.bottom) / categories.length;
-    var maxVal = Math.max.apply(null, categories.map(function (k) { return breakdown[k].total; }));
-    var availWidth = W - padding.left - padding.right;
+    const categories = Object.keys(breakdown);
+    const padding = { top: 16, bottom: 16, left: 90, right: 60 };
+    const barHeight = Math.min(28, (H - padding.top - padding.bottom) / categories.length - 10);
+    const barSpacing = (H - padding.top - padding.bottom) / categories.length;
+    const maxVal = Math.max.apply(null, categories.map(function (k) { return breakdown[k].total; }));
+    const availWidth = W - padding.left - padding.right;
 
-    var animFrame = 0;
-    var totalFrames = 50;
-
-    function easeOut(t) { return 1 - Math.pow(1 - t, 3); }
-
+    /**
+     * Renders the category bars at the given animation progress.
+     * @param {number} progress - Normalised progress [0, 1].
+     */
     function draw(progress) {
       ctx.clearRect(0, 0, W, H);
 
       categories.forEach(function (cat, i) {
-        var val = breakdown[cat].total;
-        var targetWidth = maxVal > 0 ? (val / maxVal) * availWidth : 0;
-        var animWidth = targetWidth * easeOut(progress);
-        var y = padding.top + i * barSpacing + (barSpacing - barHeight) / 2;
-        var x = padding.left;
+        const val = breakdown[cat].total;
+        const targetWidth = maxVal > 0 ? (val / maxVal) * availWidth : 0;
+        const animWidth = targetWidth * easeOut(progress);
+        const y = padding.top + i * barSpacing + (barSpacing - barHeight) / 2;
+        const x = padding.left;
 
         // Category label
         ctx.font = '12px Inter, sans-serif';
@@ -248,8 +316,8 @@ var CarbonCharts = (function () {
 
         // Bar fill
         if (animWidth > 0) {
-          var grad = ctx.createLinearGradient(x, y, x + animWidth, y);
-          var color = COLORS[cat] || '#4ade80';
+          const grad = ctx.createLinearGradient(x, y, x + animWidth, y);
+          const color = COLORS[cat] || '#4ade80';
           grad.addColorStop(0, color);
           grad.addColorStop(1, color + 'aa');
           roundRect(ctx, x, y, animWidth, barHeight, barHeight / 2);
@@ -259,7 +327,7 @@ var CarbonCharts = (function () {
 
         // Value label
         if (progress > 0.5) {
-          var percent = total > 0 ? Math.round((val / total) * 100) : 0;
+          const percent = total > 0 ? Math.round((val / total) * 100) : 0;
           ctx.font = 'bold 11px Inter, sans-serif';
           ctx.fillStyle = COLORS.textPrimary;
           ctx.textAlign = 'left';
@@ -268,14 +336,7 @@ var CarbonCharts = (function () {
       });
     }
 
-    function animate() {
-      animFrame++;
-      var progress = Math.min(animFrame / totalFrames, 1);
-      draw(progress);
-      if (animFrame < totalFrames) requestAnimationFrame(animate);
-    }
-
-    animate();
+    animateChart(canvasId, draw, CATEGORY_BARS_FRAMES);
   }
 
   /**
@@ -285,31 +346,30 @@ var CarbonCharts = (function () {
    * @param {Object} baselines - Baseline values.
    */
   function drawComparison(canvasId, userTotal, baselines) {
-    var c = getContext(canvasId);
+    const c = getContext(canvasId);
     if (!c) return;
 
-    var ctx = c.ctx;
-    var W = c.width;
-    var H = c.height;
+    const ctx = c.ctx;
+    const W = c.width;
+    const H = c.height;
 
-    var items = [
+    const items = [
       { label: 'You', value: userTotal, color: '#4ade80', highlight: true },
       { label: 'India', value: baselines.india_average, color: '#22d3ee', highlight: false },
       { label: 'World', value: baselines.world_average, color: '#fbbf24', highlight: false },
       { label: 'Paris\nTarget', value: baselines.paris_target, color: '#c084fc', highlight: false },
     ];
 
-    var padding = { top: 40, bottom: 50, left: 20, right: 20 };
-    var numBars = items.length;
-    var barWidth = (W - padding.left - padding.right) / numBars - 12;
-    var maxVal = Math.max.apply(null, items.map(function (i) { return i.value; }));
-    var availH = H - padding.top - padding.bottom;
+    const padding = { top: 40, bottom: 50, left: 20, right: 20 };
+    const numBars = items.length;
+    const barWidth = (W - padding.left - padding.right) / numBars - 12;
+    const maxVal = Math.max.apply(null, items.map(function (i) { return i.value; }));
+    const availH = H - padding.top - padding.bottom;
 
-    var animFrame = 0;
-    var totalFrames = 55;
-
-    function easeOut(t) { return 1 - Math.pow(1 - t, 3); }
-
+    /**
+     * Renders the comparison bars at the given animation progress.
+     * @param {number} progress - Normalised progress [0, 1].
+     */
     function draw(progress) {
       ctx.clearRect(0, 0, W, H);
 
@@ -320,10 +380,10 @@ var CarbonCharts = (function () {
       ctx.fillText('vs. Global Benchmarks', W / 2, 16);
 
       items.forEach(function (item, i) {
-        var barH = maxVal > 0 ? (item.value / maxVal) * availH : 0;
-        var animBarH = barH * easeOut(progress);
-        var x = padding.left + i * ((W - padding.left - padding.right) / numBars) + 6;
-        var y = H - padding.bottom - animBarH;
+        const barH = maxVal > 0 ? (item.value / maxVal) * availH : 0;
+        const animBarH = barH * easeOut(progress);
+        const x = padding.left + i * ((W - padding.left - padding.right) / numBars) + 6;
+        const y = H - padding.bottom - animBarH;
 
         // Highlight glow for user
         if (item.highlight && animBarH > 0) {
@@ -333,7 +393,7 @@ var CarbonCharts = (function () {
 
         // Bar
         if (animBarH > 0) {
-          var grad = ctx.createLinearGradient(x, y, x, H - padding.bottom);
+          const grad = ctx.createLinearGradient(x, y, x, H - padding.bottom);
           grad.addColorStop(0, item.color);
           grad.addColorStop(1, item.color + '44');
           roundRect(ctx, x, y, barWidth, animBarH, [6, 6, 0, 0]);
@@ -358,20 +418,14 @@ var CarbonCharts = (function () {
         ctx.font = '11px Inter, sans-serif';
         ctx.fillStyle = item.highlight ? item.color : COLORS.textSecondary;
         ctx.textAlign = 'center';
-        var labelLines = item.label.split('\n');
+        const labelLines = item.label.split('\n');
         labelLines.forEach(function (line, li) {
           ctx.fillText(line, x + barWidth / 2, H - padding.bottom + 14 + li * 13);
         });
       });
     }
 
-    function animate() {
-      animFrame++;
-      draw(Math.min(animFrame / totalFrames, 1));
-      if (animFrame < totalFrames) requestAnimationFrame(animate);
-    }
-
-    animate();
+    animateChart(canvasId, draw, COMPARISON_FRAMES);
   }
 
   /**
@@ -380,21 +434,21 @@ var CarbonCharts = (function () {
    * @param {Array} calculations - Array of {date, total} objects.
    */
   function drawTrendLine(canvasId, calculations) {
-    var c = getContext(canvasId);
+    const c = getContext(canvasId);
     if (!c || !calculations || calculations.length === 0) return;
 
-    var ctx = c.ctx;
-    var W = c.width;
-    var H = c.height;
+    const ctx = c.ctx;
+    const W = c.width;
+    const H = c.height;
 
-    var padding = { top: 30, bottom: 40, left: 55, right: 20 };
-    var availW = W - padding.left - padding.right;
-    var availH = H - padding.top - padding.bottom;
+    const padding = { top: 30, bottom: 40, left: 55, right: 20 };
+    const availW = W - padding.left - padding.right;
+    const availH = H - padding.top - padding.bottom;
 
-    var values = calculations.map(function (c) { return c.total; });
-    var minVal = Math.min.apply(null, values) * 0.85;
-    var maxVal = Math.max.apply(null, values) * 1.1;
-    var range = maxVal - minVal || 1;
+    const values = calculations.map(function (calc) { return calc.total; });
+    const minVal = Math.min.apply(null, values) * 0.85;
+    const maxVal = Math.max.apply(null, values) * 1.1;
+    const range = maxVal - minVal || 1;
 
     function getX(i) {
       return padding.left + (i / Math.max(calculations.length - 1, 1)) * availW;
@@ -403,14 +457,18 @@ var CarbonCharts = (function () {
       return padding.top + availH - ((val - minVal) / range) * availH;
     }
 
+    /**
+     * Renders the trend line at the given animation progress.
+     * @param {number} progress - Normalised progress [0, 1].
+     */
     function draw(progress) {
       ctx.clearRect(0, 0, W, H);
 
       // Grid lines
-      var gridCount = 4;
-      for (var gi = 0; gi <= gridCount; gi++) {
-        var gy = padding.top + (gi / gridCount) * availH;
-        var gVal = Math.round(maxVal - (gi / gridCount) * range);
+      const gridCount = 4;
+      for (let gi = 0; gi <= gridCount; gi++) {
+        const gy = padding.top + (gi / gridCount) * availH;
+        const gVal = Math.round(maxVal - (gi / gridCount) * range);
         ctx.beginPath();
         ctx.moveTo(padding.left, gy);
         ctx.lineTo(W - padding.right, gy);
@@ -425,16 +483,16 @@ var CarbonCharts = (function () {
       }
 
       // Filled area under line
-      var visibleCount = Math.max(1, Math.round(calculations.length * progress));
+      const visibleCount = Math.max(1, Math.round(calculations.length * progress));
       if (visibleCount > 1) {
-        var areaGrad = ctx.createLinearGradient(0, padding.top, 0, H - padding.bottom);
+        const areaGrad = ctx.createLinearGradient(0, padding.top, 0, H - padding.bottom);
         areaGrad.addColorStop(0, 'rgba(34,211,238,0.25)');
         areaGrad.addColorStop(1, 'rgba(34,211,238,0.02)');
 
         ctx.beginPath();
         ctx.moveTo(getX(0), H - padding.bottom);
         ctx.lineTo(getX(0), getY(values[0]));
-        for (var i = 1; i < visibleCount; i++) {
+        for (let i = 1; i < visibleCount; i++) {
           ctx.lineTo(getX(i), getY(values[i]));
         }
         ctx.lineTo(getX(visibleCount - 1), H - padding.bottom);
@@ -445,7 +503,7 @@ var CarbonCharts = (function () {
         // Line
         ctx.beginPath();
         ctx.moveTo(getX(0), getY(values[0]));
-        for (var j = 1; j < visibleCount; j++) {
+        for (let j = 1; j < visibleCount; j++) {
           ctx.lineTo(getX(j), getY(values[j]));
         }
         ctx.strokeStyle = '#22d3ee';
@@ -455,9 +513,9 @@ var CarbonCharts = (function () {
       }
 
       // Dots and labels
-      for (var k = 0; k < visibleCount; k++) {
-        var px = getX(k);
-        var py = getY(values[k]);
+      for (let k = 0; k < visibleCount; k++) {
+        const px = getX(k);
+        const py = getY(values[k]);
 
         // Dot
         ctx.beginPath();
@@ -469,8 +527,8 @@ var CarbonCharts = (function () {
         ctx.stroke();
 
         // Date label
-        var date = new Date(calculations[k].date);
-        var dateStr = (date.getMonth() + 1) + '/' + date.getDate();
+        const date = new Date(calculations[k].date);
+        const dateStr = (date.getMonth() + 1) + '/' + date.getDate();
         ctx.font = '9px Inter, sans-serif';
         ctx.fillStyle = COLORS.textSecondary;
         ctx.textAlign = 'center';
@@ -478,14 +536,7 @@ var CarbonCharts = (function () {
       }
     }
 
-    var animFrame = 0;
-    var totalFrames = 60;
-    function animate() {
-      animFrame++;
-      draw(Math.min(animFrame / totalFrames, 1));
-      if (animFrame < totalFrames) requestAnimationFrame(animate);
-    }
-    animate();
+    animateChart(canvasId, draw, TREND_LINE_FRAMES);
   }
 
   /**
@@ -494,31 +545,31 @@ var CarbonCharts = (function () {
    * @param {Object} percentages - Category percentage map.
    */
   function drawDonut(canvasId, percentages) {
-    var c = getContext(canvasId);
+    const c = getContext(canvasId);
     if (!c) return;
 
-    var ctx = c.ctx;
-    var W = c.width;
-    var H = c.height;
-    var cx = W / 2;
-    var cy = H / 2;
-    var outerR = Math.min(W, H) * 0.42;
-    var innerR = outerR * 0.58;
+    const ctx = c.ctx;
+    const W = c.width;
+    const H = c.height;
+    const cx = W / 2;
+    const cy = H / 2;
+    const outerR = Math.min(W, H) * 0.42;
+    const innerR = outerR * 0.58;
 
-    var categories = Object.keys(percentages).filter(function (k) { return percentages[k] > 0; });
-    var total = categories.reduce(function (sum, k) { return sum + percentages[k]; }, 0);
+    const categories = Object.keys(percentages).filter(function (k) { return percentages[k] > 0; });
+    const total = categories.reduce(function (sum, k) { return sum + percentages[k]; }, 0);
     if (total === 0) return;
 
-    var animFrame = 0;
-    var totalFrames = 50;
-    function easeOut(t) { return 1 - Math.pow(1 - t, 3); }
-
+    /**
+     * Renders the donut chart at the given animation progress.
+     * @param {number} progress - Normalised progress [0, 1].
+     */
     function draw(progress) {
       ctx.clearRect(0, 0, W, H);
-      var currentAngle = -Math.PI / 2;
+      let currentAngle = -Math.PI / 2;
 
       categories.forEach(function (cat) {
-        var slice = (percentages[cat] / total) * Math.PI * 2 * easeOut(progress);
+        const slice = (percentages[cat] / total) * Math.PI * 2 * easeOut(progress);
 
         // Slice
         ctx.beginPath();
@@ -540,8 +591,8 @@ var CarbonCharts = (function () {
 
       // Legend below (simple)
       if (progress > 0.8) {
-        var legendY = H - 20;
-        var legendX = 8;
+        let legendY = H - 20;
+        let legendX = 8;
         categories.forEach(function (cat) {
           roundRect(ctx, legendX, legendY - 8, 10, 10, 2);
           ctx.fillStyle = COLORS[cat] || '#fff';
@@ -556,12 +607,7 @@ var CarbonCharts = (function () {
       }
     }
 
-    function animate() {
-      animFrame++;
-      draw(Math.min(animFrame / totalFrames, 1));
-      if (animFrame < totalFrames) requestAnimationFrame(animate);
-    }
-    animate();
+    animateChart(canvasId, draw, DONUT_FRAMES);
   }
 
   // Public API

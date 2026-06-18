@@ -1,17 +1,76 @@
 /**
  * @fileoverview Badge and gamification system for Carbon Footprint Platform.
  * Manages achievements, milestones, and reward logic.
- * @version 1.0.0
+ * @version 1.1.0
  */
 
-var CarbonGamification = (function () {
+/**
+ * @typedef {Object} RarityColor
+ * @property {string} bg     - Background CSS color.
+ * @property {string} border - Border CSS color.
+ * @property {string} text   - Text CSS color.
+ */
+
+/**
+ * @typedef {Object} Badge
+ * @property {string}   id          - Unique badge identifier.
+ * @property {string}   name        - Human-readable badge name.
+ * @property {string}   description - What the user did to earn this badge.
+ * @property {string}   icon        - Emoji icon for display.
+ * @property {'common'|'uncommon'|'rare'|'legendary'} rarity - Badge rarity tier.
+ * @property {'milestone'|'achievement'|'reduction'|'action'} category - Badge category.
+ * @property {function(BadgeState): boolean} condition - Predicate that checks if badge is earned.
+ */
+
+/**
+ * @typedef {Object} BadgeState
+ * @property {number}      totalCalculations - Number of calculations completed.
+ * @property {number|null} lowestFootprint   - Lowest recorded footprint (kg CO2e).
+ * @property {number|null} bestScore         - Lowest (best) score achieved.
+ * @property {number}      completedActions  - Count of completed eco-actions.
+ * @property {number}      totalReductionKg  - Total kg CO2e reduced from first calculation.
+ * @property {number}      reductionPercent  - Percentage reduction from first calculation.
+ * @property {number|null} firstFootprint    - First recorded footprint.
+ * @property {number|null} latestFootprint   - Most recent footprint.
+ */
+
+const CarbonGamification = (function () {
   'use strict';
+
+  // ── Score & footprint thresholds ────────────────────────────────
+  const ECO_CHAMPION_MAX_SCORE = 20;
+  const GREEN_WARRIOR_MAX_SCORE = 40;
+  const PARIS_ALIGNED_MAX_KG = 2500;
+  const BELOW_INDIA_AVG_MAX_KG = 1900;
+  const SUSTAINABLE_HERO_MAX_KG = 1000;
+
+  // ── Reduction thresholds ────────────────────────────────────────
+  const REDUCTION_10_PERCENT = 10;
+  const REDUCTION_25_PERCENT = 25;
+  const REDUCTION_50_PERCENT = 50;
+  const REDUCTION_1_TONNE_KG = 1000;
+
+  // ── Milestone thresholds ────────────────────────────────────────
+  const MILESTONE_FIRST = 1;
+  const MILESTONE_WEEKLY = 4;
+  const MILESTONE_DEDICATED = 12;
+
+  // ── Action thresholds ───────────────────────────────────────────
+  const ACTION_STARTER_MIN = 1;
+  const ACTION_MASTER_MIN = 5;
+  const ACTION_CHAMPION_MIN = 10;
+
+  // ── Confetti constants ──────────────────────────────────────────
+  const CONFETTI_PARTICLE_COUNT = 120;
+  const CONFETTI_DURATION_MS = 3000;
+  const CONFETTI_COLORS = ['#4ade80', '#22d3ee', '#fbbf24', '#c084fc', '#f87171', '#60a5fa'];
 
   /**
    * Complete badge definitions.
    * Each badge: id, name, description, icon, condition, rarity.
+   * @type {Badge[]}
    */
-  var BADGES = [
+  const BADGES = [
     // First steps
     {
       id: 'first_calculation',
@@ -21,7 +80,7 @@ var CarbonGamification = (function () {
       rarity: 'common',
       category: 'milestone',
       condition: function (state) {
-        return state.totalCalculations >= 1;
+        return state.totalCalculations >= MILESTONE_FIRST;
       },
     },
     {
@@ -32,7 +91,7 @@ var CarbonGamification = (function () {
       rarity: 'uncommon',
       category: 'milestone',
       condition: function (state) {
-        return state.totalCalculations >= 4;
+        return state.totalCalculations >= MILESTONE_WEEKLY;
       },
     },
     {
@@ -43,7 +102,7 @@ var CarbonGamification = (function () {
       rarity: 'rare',
       category: 'milestone',
       condition: function (state) {
-        return state.totalCalculations >= 12;
+        return state.totalCalculations >= MILESTONE_DEDICATED;
       },
     },
 
@@ -56,7 +115,7 @@ var CarbonGamification = (function () {
       rarity: 'rare',
       category: 'achievement',
       condition: function (state) {
-        return state.bestScore !== null && state.bestScore <= 20;
+        return state.bestScore !== null && state.bestScore <= ECO_CHAMPION_MAX_SCORE;
       },
     },
     {
@@ -67,7 +126,7 @@ var CarbonGamification = (function () {
       rarity: 'uncommon',
       category: 'achievement',
       condition: function (state) {
-        return state.bestScore !== null && state.bestScore <= 40;
+        return state.bestScore !== null && state.bestScore <= GREEN_WARRIOR_MAX_SCORE;
       },
     },
     {
@@ -78,7 +137,7 @@ var CarbonGamification = (function () {
       rarity: 'rare',
       category: 'achievement',
       condition: function (state) {
-        return state.lowestFootprint !== null && state.lowestFootprint <= 2500;
+        return state.lowestFootprint !== null && state.lowestFootprint <= PARIS_ALIGNED_MAX_KG;
       },
     },
     {
@@ -89,7 +148,7 @@ var CarbonGamification = (function () {
       rarity: 'common',
       category: 'achievement',
       condition: function (state) {
-        return state.lowestFootprint !== null && state.lowestFootprint <= 1900;
+        return state.lowestFootprint !== null && state.lowestFootprint <= BELOW_INDIA_AVG_MAX_KG;
       },
     },
     {
@@ -100,7 +159,7 @@ var CarbonGamification = (function () {
       rarity: 'legendary',
       category: 'achievement',
       condition: function (state) {
-        return state.lowestFootprint !== null && state.lowestFootprint <= 1000;
+        return state.lowestFootprint !== null && state.lowestFootprint <= SUSTAINABLE_HERO_MAX_KG;
       },
     },
 
@@ -124,7 +183,7 @@ var CarbonGamification = (function () {
       rarity: 'uncommon',
       category: 'reduction',
       condition: function (state) {
-        return state.reductionPercent >= 10;
+        return state.reductionPercent >= REDUCTION_10_PERCENT;
       },
     },
     {
@@ -135,7 +194,7 @@ var CarbonGamification = (function () {
       rarity: 'rare',
       category: 'reduction',
       condition: function (state) {
-        return state.reductionPercent >= 25;
+        return state.reductionPercent >= REDUCTION_25_PERCENT;
       },
     },
     {
@@ -146,7 +205,7 @@ var CarbonGamification = (function () {
       rarity: 'legendary',
       category: 'reduction',
       condition: function (state) {
-        return state.reductionPercent >= 50;
+        return state.reductionPercent >= REDUCTION_50_PERCENT;
       },
     },
     {
@@ -157,7 +216,7 @@ var CarbonGamification = (function () {
       rarity: 'rare',
       category: 'reduction',
       condition: function (state) {
-        return state.totalReductionKg >= 1000;
+        return state.totalReductionKg >= REDUCTION_1_TONNE_KG;
       },
     },
 
@@ -170,7 +229,7 @@ var CarbonGamification = (function () {
       rarity: 'common',
       category: 'action',
       condition: function (state) {
-        return state.completedActions >= 1;
+        return state.completedActions >= ACTION_STARTER_MIN;
       },
     },
     {
@@ -181,7 +240,7 @@ var CarbonGamification = (function () {
       rarity: 'uncommon',
       category: 'action',
       condition: function (state) {
-        return state.completedActions >= 5;
+        return state.completedActions >= ACTION_MASTER_MIN;
       },
     },
     {
@@ -192,15 +251,16 @@ var CarbonGamification = (function () {
       rarity: 'rare',
       category: 'action',
       condition: function (state) {
-        return state.completedActions >= 10;
+        return state.completedActions >= ACTION_CHAMPION_MIN;
       },
     },
   ];
 
   /**
    * Rarity colors for badge display.
+   * @type {Object.<string, RarityColor>}
    */
-  var RARITY_COLORS = {
+  const RARITY_COLORS = {
     common: { bg: 'rgba(134,239,172,0.15)', border: '#4ade80', text: '#4ade80' },
     uncommon: { bg: 'rgba(96,165,250,0.15)', border: '#60a5fa', text: '#60a5fa' },
     rare: { bg: 'rgba(192,132,252,0.15)', border: '#c084fc', text: '#c084fc' },
@@ -210,23 +270,36 @@ var CarbonGamification = (function () {
   /**
    * Builds a state object from stored data for condition evaluation.
    * @param {Object} params - Current app state data.
-   * @returns {Object} State for badge conditions.
+   * @returns {BadgeState} State for badge conditions.
    */
   function buildBadgeState(params) {
-    var calculations = params.calculations || [];
-    var actions = params.actions || {};
-    var completedActions = Object.values(actions).filter(Boolean).length;
+    if (!params || typeof params !== 'object') {
+      return {
+        totalCalculations: 0,
+        lowestFootprint: null,
+        bestScore: null,
+        completedActions: 0,
+        totalReductionKg: 0,
+        reductionPercent: 0,
+        firstFootprint: null,
+        latestFootprint: null,
+      };
+    }
 
-    var totalCalculations = calculations.length;
-    var footprints = calculations.map(function (c) { return c.total; });
-    var lowestFootprint = footprints.length > 0 ? Math.min.apply(null, footprints) : null;
-    var scores = calculations.map(function (c) { return c.score; }).filter(function (s) { return s !== undefined; });
-    var bestScore = scores.length > 0 ? Math.min.apply(null, scores) : null;
+    const calculations = params.calculations || [];
+    const actions = params.actions || {};
+    const completedActions = Object.values(actions).filter(Boolean).length;
 
-    var firstFootprint = footprints[0] || null;
-    var latestFootprint = footprints[footprints.length - 1] || null;
-    var totalReductionKg = (firstFootprint && latestFootprint) ? Math.max(0, firstFootprint - latestFootprint) : 0;
-    var reductionPercent = (firstFootprint && firstFootprint > 0)
+    const totalCalculations = calculations.length;
+    const footprints = calculations.map(function (c) { return c.total; });
+    const lowestFootprint = footprints.length > 0 ? Math.min.apply(null, footprints) : null;
+    const scores = calculations.map(function (c) { return c.score; }).filter(function (s) { return s !== undefined; });
+    const bestScore = scores.length > 0 ? Math.min.apply(null, scores) : null;
+
+    const firstFootprint = footprints[0] || null;
+    const latestFootprint = footprints[footprints.length - 1] || null;
+    const totalReductionKg = (firstFootprint && latestFootprint) ? Math.max(0, firstFootprint - latestFootprint) : 0;
+    const reductionPercent = (firstFootprint && firstFootprint > 0)
       ? Math.max(0, Math.round(((firstFootprint - latestFootprint) / firstFootprint) * 100))
       : 0;
 
@@ -246,11 +319,11 @@ var CarbonGamification = (function () {
    * Checks which badges should be newly earned and triggers callbacks.
    * @param {Object} params - Current app state.
    * @param {Object} alreadyEarned - Map of already-earned badge IDs.
-   * @returns {Array} Array of newly earned badge objects.
+   * @returns {Badge[]} Array of newly earned badge objects.
    */
   function checkBadges(params, alreadyEarned) {
-    var state = buildBadgeState(params);
-    var newlyEarned = [];
+    const state = buildBadgeState(params);
+    const newlyEarned = [];
 
     BADGES.forEach(function (badge) {
       if (alreadyEarned[badge.id]) return; // Already earned
@@ -258,8 +331,8 @@ var CarbonGamification = (function () {
         if (badge.condition(state)) {
           newlyEarned.push(badge);
         }
-      } catch (e) {
-        // Silently skip badges with errors
+      } catch (_err) {
+        // Silently skip badges with errors in condition evaluation
       }
     });
 
@@ -273,7 +346,7 @@ var CarbonGamification = (function () {
    */
   function getAllBadges(earnedMap) {
     return BADGES.map(function (badge) {
-      var earnedData = earnedMap[badge.id] || null;
+      const earnedData = earnedMap[badge.id] || null;
       return {
         id: badge.id,
         name: badge.name,
@@ -295,7 +368,7 @@ var CarbonGamification = (function () {
   function launchConfetti(canvas) {
     if (!canvas) return;
 
-    var ctx = canvas.getContext('2d');
+    const ctx = canvas.getContext('2d');
     canvas.width = window.innerWidth;
     canvas.height = window.innerHeight;
     canvas.style.position = 'fixed';
@@ -304,11 +377,9 @@ var CarbonGamification = (function () {
     canvas.style.pointerEvents = 'none';
     canvas.style.zIndex = '9999';
 
-    var particles = [];
-    var colors = ['#4ade80', '#22d3ee', '#fbbf24', '#c084fc', '#f87171', '#60a5fa'];
-    var PARTICLE_COUNT = 120;
+    const particles = [];
 
-    for (var i = 0; i < PARTICLE_COUNT; i++) {
+    for (let i = 0; i < CONFETTI_PARTICLE_COUNT; i++) {
       particles.push({
         x: Math.random() * canvas.width,
         y: -10 - Math.random() * 100,
@@ -316,30 +387,30 @@ var CarbonGamification = (function () {
         vx: (Math.random() - 0.5) * 3,
         rotation: Math.random() * 360,
         rotationSpeed: (Math.random() - 0.5) * 10,
-        color: colors[Math.floor(Math.random() * colors.length)],
+        color: CONFETTI_COLORS[Math.floor(Math.random() * CONFETTI_COLORS.length)],
         size: 6 + Math.random() * 8,
         opacity: 1,
       });
     }
 
-    var startTime = Date.now();
-    var DURATION = 3000; // 3 seconds
+    const startTime = Date.now();
+    const OPACITY_FADE_FACTOR = 1.5;
 
     function animate() {
-      var elapsed = Date.now() - startTime;
-      if (elapsed > DURATION) {
+      const elapsed = Date.now() - startTime;
+      if (elapsed > CONFETTI_DURATION_MS) {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         return;
       }
 
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-      var progress = elapsed / DURATION;
+      const progress = elapsed / CONFETTI_DURATION_MS;
 
       particles.forEach(function (p) {
         p.y += p.vy;
         p.x += p.vx;
         p.rotation += p.rotationSpeed;
-        p.opacity = Math.max(0, 1 - progress * 1.5);
+        p.opacity = Math.max(0, 1 - progress * OPACITY_FADE_FACTOR);
 
         ctx.save();
         ctx.globalAlpha = p.opacity;
@@ -362,9 +433,9 @@ var CarbonGamification = (function () {
    * @returns {Object} Progress statistics.
    */
   function getProgress(earnedMap) {
-    var totalBadges = BADGES.length;
-    var earnedCount = Object.keys(earnedMap).length;
-    var byRarity = { common: 0, uncommon: 0, rare: 0, legendary: 0 };
+    const totalBadges = BADGES.length;
+    const earnedCount = Object.keys(earnedMap).length;
+    const byRarity = { common: 0, uncommon: 0, rare: 0, legendary: 0 };
 
     BADGES.forEach(function (badge) {
       if (earnedMap[badge.id]) {
@@ -375,7 +446,7 @@ var CarbonGamification = (function () {
     return {
       earned: earnedCount,
       total: totalBadges,
-      percent: Math.round((earnedCount / totalBadges) * 100),
+      percent: totalBadges > 0 ? Math.round((earnedCount / totalBadges) * 100) : 0,
       byRarity: byRarity,
     };
   }

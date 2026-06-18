@@ -1,14 +1,54 @@
 /**
  * @fileoverview Main application controller for Carbon Footprint Awareness Platform.
  * Manages routing, UI state, form handling, and orchestrates all modules.
- * @version 1.0.0
+ * @version 2.0.0
+ */
+
+/**
+ * @typedef {Object} AppState
+ * @property {string} currentPage - Currently active page name.
+ * @property {number} currentStep - Current wizard step (1-5).
+ * @property {number} totalSteps - Total wizard steps.
+ * @property {Object|null} lastResult - Last calculation result.
+ * @property {Object} formData - Collected form data by category.
+ * @property {boolean} isCalculating - Whether calculation is in progress.
+ * @property {number|null} particleAnimId - requestAnimationFrame ID for particles.
+ */
+
+/**
+ * @typedef {Object} EcoAction
+ * @property {string} id - Unique action identifier.
+ * @property {string} category - Category: 'transport'|'flights'|'energy'|'diet'|'shopping'.
+ * @property {string} title - Display title.
+ * @property {number} savingKg - Estimated annual CO₂ savings in kg.
+ * @property {string} icon - Emoji icon.
+ * @property {string} difficulty - Difficulty level: 'easy'|'medium'|'hard'.
  */
 
 var CarbonApp = (function () {
   'use strict';
 
+  // ─── Constants ──────────────────────────────────────────────────────────────
+  /** @type {number} Delay in ms for calculation UX feedback */
+  const CALCULATION_UX_DELAY_MS = 600;
+  /** @type {number} Toast auto-dismiss duration in ms */
+  const TOAST_DURATION_MS = 4000;
+  /** @type {number} Badge toast duration in ms (longer for celebration) */
+  const BADGE_TOAST_DURATION_MS = 5000;
+  /** @type {number} Toast fade-out animation duration in ms */
+  const TOAST_FADE_MS = 300;
+  /** @type {number} Default score when score is missing from stored data */
+  const DEFAULT_SCORE = 50;
+  /** @type {number} Maximum toast message length */
+  const MAX_TOAST_LENGTH = 200;
+  /** @type {number} Debounce delay for resize events in ms */
+  const RESIZE_DEBOUNCE_MS = 150;
+  /** @type {Array<string>} Valid page names for navigation */
+  const VALID_PAGES = ['home', 'calculator', 'dashboard', 'actions', 'progress', 'badges'];
+
   // ─── App State ────────────────────────────────────────────────────────────
-  var state = {
+  /** @type {AppState} */
+  const state = {
     currentPage: 'home',
     currentStep: 1,
     totalSteps: 5,
@@ -21,10 +61,12 @@ var CarbonApp = (function () {
       shopping: {},
     },
     isCalculating: false,
+    particleAnimId: null,
   };
 
   // Eco-actions library
-  var ECO_ACTIONS = [
+  /** @type {Array<EcoAction>} */
+  const ECO_ACTIONS = [
     {
       id: 'act_ev',
       category: 'transport',
@@ -179,6 +221,56 @@ var CarbonApp = (function () {
     },
   ];
 
+  // ─── Utility Helpers ──────────────────────────────────────────────────────
+
+  /**
+   * Creates a debounced version of a function.
+   * @param {Function} fn - Function to debounce.
+   * @param {number} delay - Delay in milliseconds.
+   * @returns {Function} Debounced function.
+   */
+  function debounce(fn, delay) {
+    let timer = null;
+    return function () {
+      const context = this;
+      const args = arguments;
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(function () {
+        fn.apply(context, args);
+      }, delay);
+    };
+  }
+
+  /**
+   * Clears all child nodes from an element (CSP-friendly alternative to innerHTML='').
+   * @param {HTMLElement} element - Element to clear.
+   */
+  function clearChildren(element) {
+    while (element.firstChild) {
+      element.removeChild(element.firstChild);
+    }
+  }
+
+  /**
+   * Closes the badge detail modal.
+   */
+  function closeModal() {
+    const modal = $('badge-modal');
+    if (modal) {
+      modal.classList.remove('modal-open');
+      modal.setAttribute('aria-hidden', 'true');
+    }
+  }
+
+  /**
+   * Validates a Date object for correctness.
+   * @param {Date} date - Date to validate.
+   * @returns {boolean} Whether the date is valid.
+   */
+  function isValidDate(date) {
+    return date instanceof Date && !isNaN(date.getTime());
+  }
+
   // ─── DOM Helpers ──────────────────────────────────────────────────────────
   /**
    * Gets an element by ID safely.
@@ -195,7 +287,7 @@ var CarbonApp = (function () {
    * @param {string} text - Text to set.
    */
   function setText(id, text) {
-    var el = $(id);
+    const el = $(id);
     if (el) el.textContent = String(text);
   }
 
@@ -205,23 +297,29 @@ var CarbonApp = (function () {
    * @param {string} display - CSS display value.
    */
   function setDisplay(id, display) {
-    var el = $(id);
+    const el = $(id);
     if (el) el.style.display = display;
   }
 
   // ─── Navigation / Routing ────────────────────────────────────────────────
   /**
    * Navigates to a page by ID.
-   * @param {string} pageName - Page to navigate to.
+   * @param {string} pageName - Page to navigate to. Must be one of VALID_PAGES.
    */
   function navigateTo(pageName) {
-    var pages = document.querySelectorAll('.page-section');
+    // Validate page name against whitelist
+    if (VALID_PAGES.indexOf(pageName) === -1) {
+      console.warn('[CarbonApp] Invalid page name:', pageName);
+      return;
+    }
+
+    const pages = document.querySelectorAll('.page-section');
     pages.forEach(function (p) {
       p.classList.remove('page-active');
       p.setAttribute('aria-hidden', 'true');
     });
 
-    var target = $('page-' + pageName);
+    const target = $('page-' + pageName);
     if (target) {
       target.classList.add('page-active');
       target.setAttribute('aria-hidden', 'false');
@@ -229,13 +327,20 @@ var CarbonApp = (function () {
     }
 
     // Update nav tabs
-    var navBtns = document.querySelectorAll('.nav-tab');
+    const navBtns = document.querySelectorAll('.nav-tab');
     navBtns.forEach(function (btn) {
       btn.classList.toggle('nav-tab-active', btn.dataset.page === pageName);
       btn.setAttribute('aria-current', btn.dataset.page === pageName ? 'page' : 'false');
     });
 
     state.currentPage = pageName;
+
+    // Pause/resume particle animation based on page visibility
+    if (pageName === 'home') {
+      resumeParticles();
+    } else {
+      pauseParticles();
+    }
 
     // Trigger page-specific init
     if (pageName === 'dashboard' && state.lastResult) {
@@ -257,11 +362,11 @@ var CarbonApp = (function () {
    * Updates the step progress indicator.
    */
   function updateStepIndicator() {
-    var step = state.currentStep;
-    var total = state.totalSteps;
+    const step = state.currentStep;
+    const total = state.totalSteps;
 
     // Update progress bar
-    var bar = $('calc-progress-bar');
+    const bar = $('calc-progress-bar');
     if (bar) bar.style.width = ((step / total) * 100) + '%';
 
     // Update step number text
@@ -269,7 +374,7 @@ var CarbonApp = (function () {
     setText('step-total', total);
 
     // Update step indicator dots
-    var dots = document.querySelectorAll('.step-dot');
+    const dots = document.querySelectorAll('.step-dot');
     dots.forEach(function (dot, i) {
       dot.classList.toggle('step-dot-active', i < step);
       dot.classList.toggle('step-dot-current', i === step - 1);
@@ -277,8 +382,8 @@ var CarbonApp = (function () {
     });
 
     // Show/hide step panels
-    for (var s = 1; s <= total; s++) {
-      var panel = $('step-panel-' + s);
+    for (let s = 1; s <= total; s++) {
+      const panel = $('step-panel-' + s);
       if (panel) {
         panel.classList.toggle('step-panel-active', s === step);
         panel.setAttribute('aria-hidden', s !== step ? 'true' : 'false');
@@ -286,9 +391,9 @@ var CarbonApp = (function () {
     }
 
     // Prev/Next buttons
-    var prevBtn = $('btn-prev');
-    var nextBtn = $('btn-next');
-    var calcBtn = $('btn-calculate');
+    const prevBtn = $('btn-prev');
+    const nextBtn = $('btn-next');
+    const calcBtn = $('btn-calculate');
 
     if (prevBtn) prevBtn.disabled = step === 1;
     if (nextBtn) nextBtn.style.display = step < total ? 'inline-flex' : 'none';
@@ -300,19 +405,19 @@ var CarbonApp = (function () {
    * @param {number} step - Step number.
    */
   function collectStepData(step) {
-    var stepKeys = ['transport', 'flights', 'energy', 'diet', 'shopping'];
-    var key = stepKeys[step - 1];
+    const stepKeys = ['transport', 'flights', 'energy', 'diet', 'shopping'];
+    const key = stepKeys[step - 1];
     if (!key) return;
 
-    var panel = $('step-panel-' + step);
+    const panel = $('step-panel-' + step);
     if (!panel) return;
 
-    var inputs = panel.querySelectorAll('input, select');
+    const inputs = panel.querySelectorAll('input, select');
     inputs.forEach(function (input) {
       if (!input.name) return;
-      var val = input.type === 'checkbox' ? input.checked : input.value;
+      const val = input.type === 'checkbox' ? input.checked : input.value;
       // Sanitize: only allow expected chars in names
-      var safeName = input.name.replace(/[^a-zA-Z0-9_]/g, '');
+      const safeName = input.name.replace(/[^a-zA-Z0-9_]/g, '');
       if (safeName) {
         state.formData[key][safeName] = val;
       }
@@ -325,14 +430,14 @@ var CarbonApp = (function () {
    * @returns {boolean} Whether step is valid.
    */
   function validateStep(step) {
-    var panel = $('step-panel-' + step);
+    const panel = $('step-panel-' + step);
     if (!panel) return true;
 
-    var required = panel.querySelectorAll('[required]');
-    var valid = true;
+    const required = panel.querySelectorAll('[required]');
+    let valid = true;
 
     required.forEach(function (input) {
-      var err = input.parentNode.querySelector('.field-error');
+      const err = input.parentNode.querySelector('.field-error');
       if (!input.value || input.value.trim() === '') {
         if (err) { err.textContent = 'This field is required.'; err.style.display = 'block'; }
         input.setAttribute('aria-invalid', 'true');
@@ -356,9 +461,9 @@ var CarbonApp = (function () {
     if (state.currentStep < state.totalSteps) {
       state.currentStep++;
       updateStepIndicator();
-      var panel = $('step-panel-' + state.currentStep);
+      const panel = $('step-panel-' + state.currentStep);
       if (panel) {
-        var firstInput = panel.querySelector('input, select');
+        const firstInput = panel.querySelector('input, select');
         if (firstInput) firstInput.focus();
       }
     }
@@ -385,7 +490,7 @@ var CarbonApp = (function () {
     if (state.isCalculating) return;
     state.isCalculating = true;
 
-    var calcBtn = $('btn-calculate');
+    const calcBtn = $('btn-calculate');
     if (calcBtn) {
       calcBtn.disabled = true;
       calcBtn.textContent = 'Calculating...';
@@ -394,11 +499,11 @@ var CarbonApp = (function () {
     // Small delay for UX feedback
     setTimeout(function () {
       try {
-        var result = CarbonCalculator.calculate(state.formData);
+        const result = CarbonCalculator.calculate(state.formData);
         state.lastResult = result;
 
         // Save to history
-        var saveData = {
+        const saveData = {
           total: result.total,
           score: result.score,
           breakdown: Object.keys(result.breakdown).reduce(function (acc, k) {
@@ -409,7 +514,7 @@ var CarbonApp = (function () {
         CarbonStorage.saveCalculation(saveData);
 
         // Update profile
-        var profile = CarbonStorage.profile();
+        const profile = CarbonStorage.profile();
         CarbonStorage.profile({ totalCalculations: (profile.totalCalculations || 0) + 1 });
 
         // Check badges
@@ -426,7 +531,7 @@ var CarbonApp = (function () {
           calcBtn.textContent = 'See My Footprint →';
         }
       }
-    }, 600);
+    }, CALCULATION_UX_DELAY_MS);
   }
 
   // ─── Dashboard ────────────────────────────────────────────────────────────
@@ -437,13 +542,17 @@ var CarbonApp = (function () {
   function renderDashboard(result) {
     if (!result) return;
 
-    // Score ring
+    // Score ring — wrapped in try/catch for error boundary
     setTimeout(function () {
-      CarbonCharts.drawScoreRing('chart-score-ring', result.score, result.rating, result.total);
+      try {
+        CarbonCharts.drawScoreRing('chart-score-ring', result.score, result.rating, result.total);
+      } catch (e) {
+        console.error('[CarbonApp] Score ring render error:', e);
+      }
     }, 100);
 
     // Rating badge
-    var ratingEl = $('dashboard-rating');
+    const ratingEl = $('dashboard-rating');
     if (ratingEl) {
       ratingEl.textContent = result.rating.label;
       ratingEl.style.color = result.rating.color;
@@ -454,43 +563,55 @@ var CarbonApp = (function () {
     setText('dashboard-total-tonnes', result.totalTonnes.toFixed(2));
     setText('dashboard-total-kg', result.total.toLocaleString());
 
-    // Category bars
+    // Category bars — wrapped in try/catch for error boundary
     setTimeout(function () {
-      CarbonCharts.drawCategoryBars('chart-category-bars', result.breakdown, result.total);
+      try {
+        CarbonCharts.drawCategoryBars('chart-category-bars', result.breakdown, result.total);
+      } catch (e) {
+        console.error('[CarbonApp] Category bars render error:', e);
+      }
     }, 200);
 
-    // Comparison chart
+    // Comparison chart — wrapped in try/catch for error boundary
     setTimeout(function () {
-      CarbonCharts.drawComparison('chart-comparison', result.total, CarbonCalculator.BASELINES);
+      try {
+        CarbonCharts.drawComparison('chart-comparison', result.total, CarbonCalculator.BASELINES);
+      } catch (e) {
+        console.error('[CarbonApp] Comparison chart render error:', e);
+      }
     }, 300);
 
-    // Donut chart
+    // Donut chart — wrapped in try/catch for error boundary
     setTimeout(function () {
-      CarbonCharts.drawDonut('chart-donut', result.percentages);
+      try {
+        CarbonCharts.drawDonut('chart-donut', result.percentages);
+      } catch (e) {
+        console.error('[CarbonApp] Donut chart render error:', e);
+      }
     }, 350);
 
     // Comparison stats
-    var indiaRatio = result.comparison.india_average;
-    var worldRatio = result.comparison.world_average;
-    var parisRatio = result.comparison.paris_target;
+    const indiaRatio = result.comparison.india_average;
+    const worldRatio = result.comparison.world_average;
+    const parisRatio = result.comparison.paris_target;
 
     setText('stat-vs-india', (indiaRatio.ratio > 100 ? '+' : '') + (indiaRatio.ratio - 100) + '%');
     setText('stat-vs-world', (worldRatio.ratio > 100 ? '+' : '') + (worldRatio.ratio - 100) + '%');
     setText('stat-vs-paris', (parisRatio.ratio > 100 ? '+' : '') + (parisRatio.ratio - 100) + '%');
 
-    var vsIndiaEl = $('stat-vs-india');
+    const vsIndiaEl = $('stat-vs-india');
     if (vsIndiaEl) vsIndiaEl.style.color = indiaRatio.isAbove ? '#f87171' : '#4ade80';
-    var vsWorldEl = $('stat-vs-world');
+    const vsWorldEl = $('stat-vs-world');
     if (vsWorldEl) vsWorldEl.style.color = worldRatio.isAbove ? '#f87171' : '#4ade80';
-    var vsParis = $('stat-vs-paris');
-    if (vsParis) vsParis.style.color = parisRatio.isAbove ? '#f87171' : '#4ade80';
+    const vsParisEl = $('stat-vs-paris');
+    if (vsParisEl) vsParisEl.style.color = parisRatio.isAbove ? '#f87171' : '#4ade80';
 
     // Offset data
     setText('offset-trees', result.offset.treesNeeded.toLocaleString());
     setText('offset-solar', result.offset.solarPanelDays.toLocaleString());
 
     // Motivational message
-    var msg = CarbonInsights.getMotivationalMessage(result.rating, result.total);
+    const msg = CarbonInsights.getMotivationalMessage(result.rating, result.total);
     setText('dashboard-message', msg);
 
     // Insights
@@ -502,38 +623,41 @@ var CarbonApp = (function () {
    * @param {Object} result - Calculation result.
    */
   function renderInsights(result) {
-    var container = $('insights-container');
+    const container = $('insights-container');
     if (!container) return;
 
-    var insights = CarbonInsights.generateInsights(result, 6);
-    container.innerHTML = '';
+    const insights = CarbonInsights.generateInsights(result, 6);
+    clearChildren(container);
 
     if (insights.length === 0) {
-      container.innerHTML = '<p style="color:rgba(240,253,244,0.6);text-align:center;">Great job! Keep tracking to get personalized insights.</p>';
+      const placeholder = document.createElement('p');
+      placeholder.className = 'insights-placeholder';
+      placeholder.textContent = 'Great job! Keep tracking to get personalized insights.';
+      container.appendChild(placeholder);
       return;
     }
 
     insights.forEach(function (insight) {
-      var card = document.createElement('article');
+      const card = document.createElement('article');
       card.className = 'insight-card insight-card-' + insight.difficulty;
       card.setAttribute('aria-label', insight.title);
 
-      var difficultyLabel = { easy: '🟢 Easy', medium: '🟡 Medium', hard: '🔴 Advanced' }[insight.difficulty] || insight.difficulty;
+      const difficultyLabel = { easy: '🟢 Easy', medium: '🟡 Medium', hard: '🔴 Advanced' }[insight.difficulty] || insight.difficulty;
 
       // Use textContent for all user-facing text to prevent XSS
-      var header = document.createElement('div');
+      const header = document.createElement('div');
       header.className = 'insight-header';
 
-      var iconSpan = document.createElement('span');
+      const iconSpan = document.createElement('span');
       iconSpan.className = 'insight-icon';
       iconSpan.textContent = insight.icon;
 
-      var titleDiv = document.createElement('div');
-      var titleH3 = document.createElement('h3');
+      const titleDiv = document.createElement('div');
+      const titleH3 = document.createElement('h3');
       titleH3.className = 'insight-title';
       titleH3.textContent = insight.title;
 
-      var diffSpan = document.createElement('span');
+      const diffSpan = document.createElement('span');
       diffSpan.className = 'insight-difficulty';
       diffSpan.textContent = difficultyLabel;
 
@@ -542,13 +666,13 @@ var CarbonApp = (function () {
       header.appendChild(iconSpan);
       header.appendChild(titleDiv);
 
-      var desc = document.createElement('p');
+      const desc = document.createElement('p');
       desc.className = 'insight-desc';
       desc.textContent = insight.description;
 
-      var impact = document.createElement('div');
+      const impact = document.createElement('div');
       impact.className = 'insight-impact';
-      var impactSpan = document.createElement('span');
+      const impactSpan = document.createElement('span');
       impactSpan.textContent = '💚 Save ~' + insight.impactKg.toLocaleString() + ' kg CO₂e/year (' + insight.impactPercent + '%)';
       impact.appendChild(impactSpan);
 
@@ -564,12 +688,12 @@ var CarbonApp = (function () {
    * Renders the eco-actions checklist page.
    */
   function renderActions() {
-    var container = $('actions-container');
+    const container = $('actions-container');
     if (!container) return;
 
-    var savedActions = CarbonStorage.getActions();
-    var categories = ['transport', 'flights', 'energy', 'diet', 'shopping'];
-    var categoryNames = {
+    const savedActions = CarbonStorage.getActions();
+    const categories = ['transport', 'flights', 'energy', 'diet', 'shopping'];
+    const categoryNames = {
       transport: '🚗 Transport',
       flights: '✈️ Flights',
       energy: '⚡ Home Energy',
@@ -577,42 +701,36 @@ var CarbonApp = (function () {
       shopping: '🛍️ Shopping & Lifestyle',
     };
 
-    container.innerHTML = '';
-    var totalSavings = 0;
-    var completedCount = 0;
+    clearChildren(container);
 
     categories.forEach(function (cat) {
-      var catActions = ECO_ACTIONS.filter(function (a) { return a.category === cat; });
+      const catActions = ECO_ACTIONS.filter(function (a) { return a.category === cat; });
 
-      var section = document.createElement('section');
+      const section = document.createElement('section');
       section.className = 'action-category';
       section.setAttribute('aria-label', categoryNames[cat] + ' actions');
 
-      var heading = document.createElement('h2');
+      const heading = document.createElement('h2');
       heading.className = 'action-category-title';
       heading.textContent = categoryNames[cat];
       section.appendChild(heading);
 
-      var list = document.createElement('ul');
+      const list = document.createElement('ul');
       list.className = 'action-list';
       list.setAttribute('role', 'list');
 
       catActions.forEach(function (action) {
-        var isChecked = Boolean(savedActions[action.id]);
-        if (isChecked) {
-          totalSavings += action.savingKg;
-          completedCount++;
-        }
+        const isChecked = Boolean(savedActions[action.id]);
 
-        var li = document.createElement('li');
+        const li = document.createElement('li');
         li.className = 'action-item' + (isChecked ? ' action-item-done' : '');
         li.setAttribute('role', 'listitem');
 
-        var label = document.createElement('label');
+        const label = document.createElement('label');
         label.className = 'action-label';
         label.setAttribute('for', 'action-' + action.id);
 
-        var checkbox = document.createElement('input');
+        const checkbox = document.createElement('input');
         checkbox.type = 'checkbox';
         checkbox.id = 'action-' + action.id;
         checkbox.name = 'action-' + action.id;
@@ -621,21 +739,21 @@ var CarbonApp = (function () {
         checkbox.setAttribute('aria-label', action.title);
 
         checkbox.addEventListener('change', function (e) {
-          var checked = e.target.checked;
+          const checked = e.target.checked;
           CarbonStorage.saveAction(action.id, checked);
           li.classList.toggle('action-item-done', checked);
           updateActionsTotals();
           checkAndAwardBadges();
         });
 
-        var textDiv = document.createElement('div');
+        const textDiv = document.createElement('div');
         textDiv.className = 'action-text';
 
-        var titleSpan = document.createElement('span');
+        const titleSpan = document.createElement('span');
         titleSpan.className = 'action-title';
         titleSpan.textContent = action.title;
 
-        var savingSpan = document.createElement('span');
+        const savingSpan = document.createElement('span');
         savingSpan.className = 'action-saving';
         savingSpan.textContent = '~' + action.savingKg.toLocaleString() + ' kg CO₂e saved/year';
 
@@ -659,9 +777,9 @@ var CarbonApp = (function () {
    * Updates the action totals display.
    */
   function updateActionsTotals() {
-    var savedActions = CarbonStorage.getActions();
-    var totalSavings = 0;
-    var completedCount = 0;
+    const savedActions = CarbonStorage.getActions();
+    let totalSavings = 0;
+    let completedCount = 0;
 
     ECO_ACTIONS.forEach(function (action) {
       if (savedActions[action.id]) {
@@ -674,7 +792,7 @@ var CarbonApp = (function () {
     setText('actions-count', completedCount);
     setText('actions-total', ECO_ACTIONS.length);
 
-    var progressBar = $('actions-progress-bar');
+    const progressBar = $('actions-progress-bar');
     if (progressBar) {
       progressBar.style.width = ((completedCount / ECO_ACTIONS.length) * 100) + '%';
       progressBar.setAttribute('aria-valuenow', completedCount);
@@ -687,7 +805,7 @@ var CarbonApp = (function () {
    * Renders the progress/history page.
    */
   function renderProgress() {
-    var calculations = CarbonStorage.getCalculations();
+    const calculations = CarbonStorage.getCalculations();
 
     if (calculations.length === 0) {
       setDisplay('progress-empty', 'block');
@@ -699,12 +817,12 @@ var CarbonApp = (function () {
     setDisplay('progress-charts', 'block');
 
     // Stats
-    var totals = calculations.map(function (c) { return c.total; });
-    var latestTotal = totals[totals.length - 1];
-    var firstTotal = totals[0];
-    var reductionKg = Math.max(0, firstTotal - latestTotal);
-    var reductionPercent = firstTotal > 0 ? Math.round((reductionKg / firstTotal) * 100) : 0;
-    var avgTotal = Math.round(totals.reduce(function (a, b) { return a + b; }, 0) / totals.length);
+    const totals = calculations.map(function (c) { return c.total; });
+    const latestTotal = totals[totals.length - 1];
+    const firstTotal = totals[0];
+    const reductionKg = Math.max(0, firstTotal - latestTotal);
+    const reductionPercent = firstTotal > 0 ? Math.round((reductionKg / firstTotal) * 100) : 0;
+    const avgTotal = Math.round(totals.reduce(function (a, b) { return a + b; }, 0) / totals.length);
 
     setText('progress-latest', latestTotal.toLocaleString());
     setText('progress-reduction', reductionKg.toLocaleString());
@@ -714,7 +832,11 @@ var CarbonApp = (function () {
 
     // Trend chart
     setTimeout(function () {
-      CarbonCharts.drawTrendLine('chart-trend', calculations);
+      try {
+        CarbonCharts.drawTrendLine('chart-trend', calculations);
+      } catch (e) {
+        console.error('[CarbonApp] Trend chart render error:', e);
+      }
     }, 100);
 
     // History table
@@ -726,27 +848,29 @@ var CarbonApp = (function () {
    * @param {Array} calculations - Calculation history.
    */
   function renderHistoryTable(calculations) {
-    var tbody = $('history-table-body');
+    const tbody = $('history-table-body');
     if (!tbody) return;
 
-    tbody.innerHTML = '';
-    var reversed = calculations.slice().reverse();
+    clearChildren(tbody);
+    const reversed = calculations.slice().reverse();
 
     reversed.forEach(function (calc, i) {
-      var tr = document.createElement('tr');
+      const tr = document.createElement('tr');
       tr.className = i % 2 === 0 ? 'table-row-even' : 'table-row-odd';
 
-      var date = new Date(calc.date);
-      var dateStr = date.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+      const date = new Date(calc.date);
+      const dateStr = isValidDate(date)
+        ? date.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
+        : 'Unknown date';
 
-      var prevCalc = reversed[i + 1];
-      var change = prevCalc ? calc.total - prevCalc.total : 0;
-      var changeStr = change === 0 ? '—' : (change > 0 ? '+' : '') + Math.round(change) + ' kg';
-      var changeColor = change > 0 ? '#f87171' : change < 0 ? '#4ade80' : 'rgba(240,253,244,0.5)';
+      const prevCalc = reversed[i + 1];
+      const change = prevCalc ? calc.total - prevCalc.total : 0;
+      const changeStr = change === 0 ? '—' : (change > 0 ? '+' : '') + Math.round(change) + ' kg';
+      const changeColor = change > 0 ? '#f87171' : change < 0 ? '#4ade80' : 'rgba(240,253,244,0.5)';
 
-      var rating = CarbonCalculator.getRating(calc.score || 50);
+      const rating = CarbonCalculator.getRating(calc.score || DEFAULT_SCORE);
 
-      var cells = [
+      const cells = [
         { text: dateStr, align: 'left' },
         { text: calc.total.toLocaleString() + ' kg', align: 'right' },
         { text: (calc.total / 1000).toFixed(2) + ' t', align: 'right' },
@@ -755,7 +879,7 @@ var CarbonApp = (function () {
       ];
 
       cells.forEach(function (cell) {
-        var td = document.createElement('td');
+        const td = document.createElement('td');
         td.className = 'table-cell';
         td.textContent = cell.text;
         td.style.textAlign = cell.align || 'left';
@@ -772,27 +896,27 @@ var CarbonApp = (function () {
    * Renders the badges/achievements page.
    */
   function renderBadges() {
-    var container = $('badges-grid');
+    const container = $('badges-grid');
     if (!container) return;
 
-    var earnedMap = CarbonStorage.getBadges();
-    var allBadges = CarbonGamification.getAllBadges(earnedMap);
-    var progress = CarbonGamification.getProgress(earnedMap);
+    const earnedMap = CarbonStorage.getBadges();
+    const allBadges = CarbonGamification.getAllBadges(earnedMap);
+    const progress = CarbonGamification.getProgress(earnedMap);
 
     setText('badges-earned-count', progress.earned);
     setText('badges-total-count', progress.total);
 
-    var progressBar = $('badges-progress-bar');
+    const progressBar = $('badges-progress-bar');
     if (progressBar) {
       progressBar.style.width = progress.percent + '%';
       progressBar.setAttribute('aria-valuenow', progress.earned);
       progressBar.setAttribute('aria-valuemax', progress.total);
     }
 
-    container.innerHTML = '';
+    clearChildren(container);
 
     allBadges.forEach(function (badge) {
-      var card = document.createElement('article');
+      const card = document.createElement('article');
       card.className = 'badge-card' + (badge.earned ? ' badge-earned' : ' badge-locked');
       card.setAttribute('aria-label', badge.name + (badge.earned ? ' earned' : ' not yet earned'));
       card.setAttribute('tabindex', '0');
@@ -804,40 +928,39 @@ var CarbonApp = (function () {
         card.style.background = badge.rarityColors.bg;
       }
 
-      var iconDiv = document.createElement('div');
+      const iconDiv = document.createElement('div');
       iconDiv.className = 'badge-icon';
       iconDiv.textContent = badge.earned ? badge.icon : '🔒';
       iconDiv.setAttribute('aria-hidden', 'true');
 
-      var nameDiv = document.createElement('div');
+      const nameDiv = document.createElement('div');
       nameDiv.className = 'badge-name';
       nameDiv.textContent = badge.name;
       if (badge.earned) nameDiv.style.color = badge.rarityColors.text;
 
-      var rarityDiv = document.createElement('div');
+      const rarityDiv = document.createElement('div');
       rarityDiv.className = 'badge-rarity';
       rarityDiv.textContent = badge.rarity.charAt(0).toUpperCase() + badge.rarity.slice(1);
       if (badge.earned) rarityDiv.style.color = badge.rarityColors.text;
 
-      var descDiv = document.createElement('div');
+      const descDiv = document.createElement('div');
       descDiv.className = 'badge-desc';
       descDiv.textContent = badge.description;
 
+      // Append common elements first, then conditionally add earned date
+      card.appendChild(iconDiv);
+      card.appendChild(nameDiv);
+      card.appendChild(rarityDiv);
+      card.appendChild(descDiv);
+
       if (badge.earned && badge.earnedAt) {
-        var earnedDateDiv = document.createElement('div');
+        const earnedDateDiv = document.createElement('div');
         earnedDateDiv.className = 'badge-earned-date';
-        var d = new Date(badge.earnedAt);
-        earnedDateDiv.textContent = 'Earned ' + d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
-        card.appendChild(iconDiv);
-        card.appendChild(nameDiv);
-        card.appendChild(rarityDiv);
-        card.appendChild(descDiv);
+        const d = new Date(badge.earnedAt);
+        earnedDateDiv.textContent = isValidDate(d)
+          ? 'Earned ' + d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
+          : 'Earned';
         card.appendChild(earnedDateDiv);
-      } else {
-        card.appendChild(iconDiv);
-        card.appendChild(nameDiv);
-        card.appendChild(rarityDiv);
-        card.appendChild(descDiv);
       }
 
       // Keyboard accessibility
@@ -859,7 +982,7 @@ var CarbonApp = (function () {
    * @param {Object} badge - Badge object.
    */
   function showBadgeDetail(badge) {
-    var modal = $('badge-modal');
+    const modal = $('badge-modal');
     if (!modal) return;
 
     setText('modal-badge-icon', badge.icon);
@@ -869,14 +992,14 @@ var CarbonApp = (function () {
     setText('modal-badge-status', badge.earned ? '✅ Earned!' : '🔒 Not yet earned');
 
     if (badge.earned) {
-      var el = $('modal-badge-status');
+      const el = $('modal-badge-status');
       if (el) el.style.color = '#4ade80';
     }
 
     modal.classList.add('modal-open');
     modal.setAttribute('aria-hidden', 'false');
 
-    var closeBtn = $('modal-close');
+    const closeBtn = $('modal-close');
     if (closeBtn) closeBtn.focus();
   }
 
@@ -885,11 +1008,11 @@ var CarbonApp = (function () {
    * Checks and awards any newly unlocked badges.
    */
   function checkAndAwardBadges() {
-    var calculations = CarbonStorage.getCalculations();
-    var actions = CarbonStorage.getActions();
-    var existingBadges = CarbonStorage.getBadges();
+    const calculations = CarbonStorage.getCalculations();
+    const actions = CarbonStorage.getActions();
+    const existingBadges = CarbonStorage.getBadges();
 
-    var newBadges = CarbonGamification.checkBadges(
+    const newBadges = CarbonGamification.checkBadges(
       { calculations: calculations, actions: actions },
       existingBadges
     );
@@ -907,38 +1030,38 @@ var CarbonApp = (function () {
    * @param {string} [type='info'] - Toast type: 'info', 'success', 'error'.
    */
   function showToast(message, type) {
-    var container = $('toast-container');
+    const container = $('toast-container');
     if (!container) return;
 
     type = type || 'info';
-    var toast = document.createElement('div');
+    const toast = document.createElement('div');
     toast.className = 'toast toast-' + type;
     toast.setAttribute('role', 'status');
     toast.setAttribute('aria-live', 'polite');
 
-    var textSpan = document.createElement('span');
-    textSpan.textContent = String(message).substring(0, 200); // Limit message length
+    const textSpan = document.createElement('span');
+    textSpan.textContent = String(message).substring(0, MAX_TOAST_LENGTH);
     toast.appendChild(textSpan);
 
-    var closeBtn = document.createElement('button');
+    const closeBtn = document.createElement('button');
     closeBtn.className = 'toast-close';
     closeBtn.setAttribute('aria-label', 'Close notification');
     closeBtn.textContent = '×';
     closeBtn.addEventListener('click', function () {
       toast.classList.add('toast-fade-out');
-      setTimeout(function () { toast.remove(); }, 300);
+      setTimeout(function () { toast.remove(); }, TOAST_FADE_MS);
     });
     toast.appendChild(closeBtn);
 
     container.appendChild(toast);
 
-    // Auto-remove after 4 seconds
+    // Auto-remove after configured duration
     setTimeout(function () {
       if (toast.parentNode) {
         toast.classList.add('toast-fade-out');
-        setTimeout(function () { toast.remove(); }, 300);
+        setTimeout(function () { toast.remove(); }, TOAST_FADE_MS);
       }
-    }, 4000);
+    }, TOAST_DURATION_MS);
   }
 
   /**
@@ -946,23 +1069,23 @@ var CarbonApp = (function () {
    * @param {Object} badge - Badge object.
    */
   function showBadgeToast(badge) {
-    var container = $('toast-container');
+    const container = $('toast-container');
     if (!container) return;
 
-    var toast = document.createElement('div');
+    const toast = document.createElement('div');
     toast.className = 'toast toast-badge';
     toast.setAttribute('role', 'status');
     toast.setAttribute('aria-live', 'assertive');
 
-    var icon = document.createElement('span');
+    const icon = document.createElement('span');
     icon.className = 'toast-badge-icon';
     icon.textContent = badge.icon;
     icon.setAttribute('aria-hidden', 'true');
 
-    var textDiv = document.createElement('div');
-    var titleEl = document.createElement('strong');
+    const textDiv = document.createElement('div');
+    const titleEl = document.createElement('strong');
     titleEl.textContent = '🏅 Badge Unlocked!';
-    var nameEl = document.createElement('span');
+    const nameEl = document.createElement('span');
     nameEl.textContent = badge.name;
     textDiv.appendChild(titleEl);
     textDiv.appendChild(document.createElement('br'));
@@ -973,38 +1096,95 @@ var CarbonApp = (function () {
     container.appendChild(toast);
 
     // Launch confetti
-    var confettiCanvas = $('confetti-canvas');
+    const confettiCanvas = $('confetti-canvas');
     if (confettiCanvas) CarbonGamification.launchConfetti(confettiCanvas);
 
     setTimeout(function () {
       if (toast.parentNode) {
         toast.classList.add('toast-fade-out');
-        setTimeout(function () { toast.remove(); }, 300);
+        setTimeout(function () { toast.remove(); }, TOAST_FADE_MS);
       }
-    }, 5000);
+    }, BADGE_TOAST_DURATION_MS);
   }
 
   // ─── Particle Background ─────────────────────────────────────────────────
+  /** @type {Array} Particle objects for background animation */
+  let particles = [];
+  /** @type {CanvasRenderingContext2D|null} Particle canvas context */
+  let particleCtx = null;
+  /** @type {HTMLCanvasElement|null} Particle canvas element */
+  let particleCanvas = null;
+
+  /**
+   * Pauses particle animation to save CPU when not on home page.
+   */
+  function pauseParticles() {
+    if (state.particleAnimId) {
+      cancelAnimationFrame(state.particleAnimId);
+      state.particleAnimId = null;
+    }
+  }
+
+  /**
+   * Resumes particle animation when returning to home page.
+   */
+  function resumeParticles() {
+    if (!state.particleAnimId && particleCtx && particleCanvas) {
+      animateParticles();
+    }
+  }
+
+  /**
+   * Renders one frame of the particle animation loop.
+   */
+  function animateParticles() {
+    if (!particleCtx || !particleCanvas) return;
+
+    particleCtx.clearRect(0, 0, particleCanvas.width, particleCanvas.height);
+
+    particles.forEach(function (p) {
+      p.y -= p.vy;
+      p.x += p.vx;
+      p.rotation += p.rotSpeed;
+
+      if (p.y < -30) {
+        p.y = particleCanvas.height + 30;
+        p.x = Math.random() * particleCanvas.width;
+      }
+
+      particleCtx.save();
+      particleCtx.globalAlpha = p.opacity;
+      particleCtx.translate(p.x, p.y);
+      particleCtx.rotate((p.rotation * Math.PI) / 180);
+      particleCtx.font = p.size + 'px serif';
+      particleCtx.textAlign = 'center';
+      particleCtx.textBaseline = 'middle';
+      particleCtx.fillText(p.emoji, 0, 0);
+      particleCtx.restore();
+    });
+
+    state.particleAnimId = requestAnimationFrame(animateParticles);
+  }
+
   /**
    * Initializes the floating particle background canvas.
    */
   function initParticles() {
-    var canvas = $('particle-canvas');
-    if (!canvas) return;
+    particleCanvas = $('particle-canvas');
+    if (!particleCanvas) return;
 
-    var ctx = canvas.getContext('2d');
-    var particles = [];
-    var NUM_PARTICLES = 40;
+    particleCtx = particleCanvas.getContext('2d');
+    const NUM_PARTICLES = 40;
 
     function resize() {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
+      particleCanvas.width = window.innerWidth;
+      particleCanvas.height = window.innerHeight;
     }
     resize();
-    window.addEventListener('resize', resize);
+    window.addEventListener('resize', debounce(resize, RESIZE_DEBOUNCE_MS));
 
-    var emojis = ['🌿', '🍃', '🌱', '♻️', '🌎'];
-    for (var i = 0; i < NUM_PARTICLES; i++) {
+    const emojis = ['🌿', '🍃', '🌱', '♻️', '🌎'];
+    for (let i = 0; i < NUM_PARTICLES; i++) {
       particles.push({
         x: Math.random() * window.innerWidth,
         y: Math.random() * window.innerHeight,
@@ -1016,33 +1196,6 @@ var CarbonApp = (function () {
         rotation: Math.random() * 360,
         rotSpeed: (Math.random() - 0.5) * 0.5,
       });
-    }
-
-    function animateParticles() {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-      particles.forEach(function (p) {
-        p.y -= p.vy;
-        p.x += p.vx;
-        p.rotation += p.rotSpeed;
-
-        if (p.y < -30) {
-          p.y = canvas.height + 30;
-          p.x = Math.random() * canvas.width;
-        }
-
-        ctx.save();
-        ctx.globalAlpha = p.opacity;
-        ctx.translate(p.x, p.y);
-        ctx.rotate((p.rotation * Math.PI) / 180);
-        ctx.font = p.size + 'px serif';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(p.emoji, 0, 0);
-        ctx.restore();
-      });
-
-      requestAnimationFrame(animateParticles);
     }
 
     animateParticles();
@@ -1058,13 +1211,16 @@ var CarbonApp = (function () {
   function animateCounter(el, target, duration) {
     if (!el) return;
     duration = duration || 1500;
-    var start = 0;
-    var startTime = null;
+    let startTime = null;
 
+    /**
+     * Animation step callback for requestAnimationFrame.
+     * @param {DOMHighResTimeStamp} timestamp - Current timestamp.
+     */
     function step(timestamp) {
       if (!startTime) startTime = timestamp;
-      var progress = Math.min((timestamp - startTime) / duration, 1);
-      var eased = 1 - Math.pow(1 - progress, 3);
+      const progress = Math.min((timestamp - startTime) / duration, 1);
+      const eased = 1 - Math.pow(1 - progress, 3);
       el.textContent = Math.round(eased * target).toLocaleString();
       if (progress < 1) requestAnimationFrame(step);
     }
@@ -1076,7 +1232,7 @@ var CarbonApp = (function () {
    * Initializes animated home page stats.
    */
   function initHomeStats() {
-    var stats = [
+    const stats = [
       { id: 'stat-world-avg', value: 4800 },
       { id: 'stat-india-avg', value: 1900 },
       { id: 'stat-paris-target', value: 2000 },
@@ -1084,7 +1240,7 @@ var CarbonApp = (function () {
 
     // Intersection Observer to trigger when visible
     if ('IntersectionObserver' in window) {
-      var observer = new IntersectionObserver(function (entries) {
+      const observer = new IntersectionObserver(function (entries) {
         entries.forEach(function (entry) {
           if (entry.isIntersecting) {
             stats.forEach(function (s) {
@@ -1095,7 +1251,7 @@ var CarbonApp = (function () {
         });
       }, { threshold: 0.5 });
 
-      var statsSection = $('home-stats');
+      const statsSection = $('home-stats');
       if (statsSection) observer.observe(statsSection);
     } else {
       stats.forEach(function (s) { setText(s.id, s.value.toLocaleString()); });
@@ -1107,11 +1263,11 @@ var CarbonApp = (function () {
    * Syncs range input value display.
    */
   function initRangeDisplays() {
-    var ranges = document.querySelectorAll('input[type="range"][data-display]');
+    const ranges = document.querySelectorAll('input[type="range"][data-display]');
     ranges.forEach(function (range) {
-      var displayId = range.getAttribute('data-display');
-      var unit = range.getAttribute('data-unit') || '';
-      var display = $(displayId);
+      const displayId = range.getAttribute('data-display');
+      const unit = range.getAttribute('data-unit') || '';
+      const display = $(displayId);
       if (display) {
         display.textContent = range.value + unit;
         range.addEventListener('input', function () {
@@ -1126,10 +1282,10 @@ var CarbonApp = (function () {
    * Toggles theme.
    */
   function toggleTheme() {
-    var root = document.documentElement;
-    var isLight = root.classList.toggle('light-theme');
+    const root = document.documentElement;
+    const isLight = root.classList.toggle('light-theme');
     CarbonStorage.settings({ theme: isLight ? 'light' : 'dark' });
-    var btn = $('theme-toggle');
+    const btn = $('theme-toggle');
     if (btn) {
       btn.textContent = isLight ? '🌙' : '☀️';
       btn.setAttribute('aria-label', isLight ? 'Switch to dark mode' : 'Switch to light mode');
@@ -1141,11 +1297,11 @@ var CarbonApp = (function () {
    * Exports user data as a JSON download.
    */
   function exportData() {
-    var data = CarbonStorage.exportData();
-    var json = JSON.stringify(data, null, 2);
-    var blob = new Blob([json], { type: 'application/json' });
-    var url = URL.createObjectURL(blob);
-    var a = document.createElement('a');
+    const data = CarbonStorage.exportData();
+    const json = JSON.stringify(data, null, 2);
+    const blob = new Blob([json], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
     a.href = url;
     a.download = 'carbon-footprint-data-' + new Date().toISOString().slice(0, 10) + '.json';
     document.body.appendChild(a);
@@ -1160,7 +1316,7 @@ var CarbonApp = (function () {
    * Resets all app data after confirmation.
    */
   function resetData() {
-    var confirmed = window.confirm('Are you sure you want to reset all your data? This cannot be undone.');
+    const confirmed = window.confirm('Are you sure you want to reset all your data? This cannot be undone.');
     if (confirmed) {
       CarbonStorage.clearAll();
       state.lastResult = null;
@@ -1177,7 +1333,7 @@ var CarbonApp = (function () {
    */
   function bindEvents() {
     // Nav tabs
-    var navTabs = document.querySelectorAll('.nav-tab');
+    const navTabs = document.querySelectorAll('.nav-tab');
     navTabs.forEach(function (tab) {
       tab.addEventListener('click', function () {
         navigateTo(tab.dataset.page);
@@ -1187,80 +1343,97 @@ var CarbonApp = (function () {
       });
     });
 
-    // CTA buttons
-    var startBtn = $('btn-start-calculator');
+    // CTA buttons — use JS event listeners instead of inline onclick
+    const startBtn = $('btn-start-calculator');
     if (startBtn) startBtn.addEventListener('click', function () { navigateTo('calculator'); });
 
-    var startBtn2 = $('btn-start-calculator-2');
+    const startBtn2 = $('btn-start-calculator-2');
     if (startBtn2) startBtn2.addEventListener('click', function () { navigateTo('calculator'); });
 
+    // Logo click — replaces inline onclick
+    const logoLink = document.querySelector('.logo-link');
+    if (logoLink) {
+      logoLink.addEventListener('click', function (e) {
+        e.preventDefault();
+        navigateTo('home');
+      });
+    }
+
+    // "Take Action Now" CTA — replaces inline onclick
+    const takeActionBtn = $('btn-take-action-cta');
+    if (takeActionBtn) {
+      takeActionBtn.addEventListener('click', function () {
+        navigateTo('actions');
+      });
+    }
+
+    // Progress empty CTA — replaces inline onclick
+    const progressCta = $('btn-progress-cta');
+    if (progressCta) {
+      progressCta.addEventListener('click', function () {
+        navigateTo('calculator');
+      });
+    }
+
     // Calculator navigation
-    var nextBtn = $('btn-next');
+    const nextBtn = $('btn-next');
     if (nextBtn) nextBtn.addEventListener('click', nextStep);
 
-    var prevBtn = $('btn-prev');
+    const prevBtn = $('btn-prev');
     if (prevBtn) prevBtn.addEventListener('click', prevStep);
 
-    var calcBtn = $('btn-calculate');
+    const calcBtn = $('btn-calculate');
     if (calcBtn) calcBtn.addEventListener('click', runCalculation);
 
     // Dashboard actions
-    var reCalcBtn = $('btn-recalculate');
+    const reCalcBtn = $('btn-recalculate');
     if (reCalcBtn) reCalcBtn.addEventListener('click', function () {
       state.currentStep = 1;
       updateStepIndicator();
       navigateTo('calculator');
     });
 
-    var viewActionsBtn = $('btn-view-actions');
+    const viewActionsBtn = $('btn-view-actions');
     if (viewActionsBtn) viewActionsBtn.addEventListener('click', function () { navigateTo('actions'); });
 
     // Theme toggle
-    var themeBtn = $('theme-toggle');
+    const themeBtn = $('theme-toggle');
     if (themeBtn) themeBtn.addEventListener('click', toggleTheme);
 
     // Export data
-    var exportBtn = $('btn-export');
+    const exportBtn = $('btn-export');
     if (exportBtn) exportBtn.addEventListener('click', exportData);
 
     // Reset data
-    var resetBtn = $('btn-reset');
+    const resetBtn = $('btn-reset');
     if (resetBtn) resetBtn.addEventListener('click', resetData);
 
-    // Modal close
-    var modalClose = $('modal-close');
-    if (modalClose) {
-      modalClose.addEventListener('click', function () {
-        var modal = $('badge-modal');
-        if (modal) {
-          modal.classList.remove('modal-open');
-          modal.setAttribute('aria-hidden', 'true');
-        }
-      });
+    // Modal close — uses extracted closeModal() helper
+    const modalCloseBtn = $('modal-close');
+    if (modalCloseBtn) {
+      modalCloseBtn.addEventListener('click', closeModal);
     }
 
-    var modal = $('badge-modal');
+    const modal = $('badge-modal');
     if (modal) {
       modal.addEventListener('click', function (e) {
         if (e.target === modal) {
-          modal.classList.remove('modal-open');
-          modal.setAttribute('aria-hidden', 'true');
+          closeModal();
         }
       });
       modal.addEventListener('keydown', function (e) {
         if (e.key === 'Escape') {
-          modal.classList.remove('modal-open');
-          modal.setAttribute('aria-hidden', 'true');
+          closeModal();
         }
       });
     }
 
     // Skip link
-    var skipLink = $('skip-link');
+    const skipLink = $('skip-link');
     if (skipLink) {
       skipLink.addEventListener('click', function (e) {
         e.preventDefault();
-        var main = $('main-content');
+        const main = $('main-content');
         if (main) {
           main.setAttribute('tabindex', '-1');
           main.focus();
@@ -1271,10 +1444,9 @@ var CarbonApp = (function () {
     // Keyboard: Escape closes modal
     document.addEventListener('keydown', function (e) {
       if (e.key === 'Escape') {
-        var openModal = document.querySelector('.modal-open');
+        const openModal = document.querySelector('.modal-open');
         if (openModal) {
-          openModal.classList.remove('modal-open');
-          openModal.setAttribute('aria-hidden', 'true');
+          closeModal();
         }
       }
     });
@@ -1285,11 +1457,21 @@ var CarbonApp = (function () {
    * Initializes the application.
    */
   function init() {
+    // Verify module dependencies
+    if (typeof CarbonStorage === 'undefined' ||
+        typeof CarbonCalculator === 'undefined' ||
+        typeof CarbonCharts === 'undefined' ||
+        typeof CarbonInsights === 'undefined' ||
+        typeof CarbonGamification === 'undefined') {
+      console.error('[CarbonApp] Missing required module dependencies. Ensure all scripts are loaded.');
+      return;
+    }
+
     // Restore theme preference
-    var storedSettings = CarbonStorage.settings();
+    const storedSettings = CarbonStorage.settings();
     if (storedSettings.theme === 'light') {
       document.documentElement.classList.add('light-theme');
-      var btn = $('theme-toggle');
+      const btn = $('theme-toggle');
       if (btn) { btn.textContent = '🌙'; btn.setAttribute('aria-label', 'Switch to dark mode'); }
     }
 
@@ -1315,17 +1497,17 @@ var CarbonApp = (function () {
     navigateTo('home');
 
     // Check for existing data
-    var calculations = CarbonStorage.getCalculations();
+    const calculations = CarbonStorage.getCalculations();
     if (calculations.length > 0) {
-      var lastCalc = calculations[calculations.length - 1];
+      const lastCalc = calculations[calculations.length - 1];
       // Reconstruct minimal state.lastResult from stored data for dashboard
       if (lastCalc) {
         try {
-          var reconstructed = CarbonCalculator.getRating(lastCalc.score || 50);
+          const reconstructed = CarbonCalculator.getRating(lastCalc.score || DEFAULT_SCORE);
           state.lastResult = {
             total: lastCalc.total,
             totalTonnes: Math.round((lastCalc.total / 1000) * 100) / 100,
-            score: lastCalc.score || 50,
+            score: lastCalc.score || DEFAULT_SCORE,
             rating: reconstructed,
             breakdown: lastCalc.breakdown
               ? Object.keys(lastCalc.breakdown).reduce(function (acc, k) {
@@ -1339,7 +1521,7 @@ var CarbonApp = (function () {
           };
           // Calculate percentages from stored breakdown
           if (lastCalc.breakdown) {
-            var total = lastCalc.total;
+            const total = lastCalc.total;
             Object.keys(lastCalc.breakdown).forEach(function (k) {
               state.lastResult.percentages[k] = total > 0
                 ? Math.round((lastCalc.breakdown[k] / total) * 100) : 0;
@@ -1350,8 +1532,6 @@ var CarbonApp = (function () {
         }
       }
     }
-
-    console.log('[CarbonApp] Initialized successfully');
   }
 
   // Auto-initialize when DOM is ready

@@ -2,18 +2,82 @@
  * @fileoverview Personalized insights engine for the Carbon Footprint Platform.
  * Generates context-aware, actionable recommendations based on user's emission profile.
  * Uses a rule-based expert system with priority scoring.
- * @version 1.0.0
+ * @version 1.1.0
  */
 
-var CarbonInsights = (function () {
+/**
+ * @typedef {Object} InsightDefinition
+ * @property {string}   id          - Unique insight identifier.
+ * @property {string}   category    - Emission category (transport, flights, energy, diet, shopping).
+ * @property {number}   priority    - Priority score (higher = more important).
+ * @property {string}   title       - Human-readable insight title.
+ * @property {string}   description - Detailed recommendation text.
+ * @property {function(Object): number} impact - Returns estimated kg CO2e saved per year.
+ * @property {'easy'|'medium'|'hard'} difficulty - Implementation difficulty.
+ * @property {string}   icon        - Emoji icon.
+ * @property {string[]} tags        - Searchable tags.
+ * @property {function(Object): boolean} condition - Predicate that checks applicability.
+ */
+
+/**
+ * @typedef {Object} EnrichedInsight
+ * @property {string}   id            - Unique insight identifier.
+ * @property {string}   category      - Emission category.
+ * @property {string}   title         - Human-readable insight title.
+ * @property {string}   description   - Detailed recommendation text.
+ * @property {number}   impactKg      - Estimated kg CO2e saved per year.
+ * @property {number}   impactPercent - Percentage of total footprint this represents.
+ * @property {'easy'|'medium'|'hard'} difficulty - Implementation difficulty.
+ * @property {string}   icon          - Emoji icon.
+ * @property {string[]} tags          - Searchable tags.
+ * @property {number}   priority      - Priority score.
+ */
+
+const CarbonInsights = (function () {
   'use strict';
+
+  // ── Condition thresholds — transport (kg CO2e/year) ─────────────
+  const TRANSPORT_EV_MIN = 500;
+  const TRANSPORT_CARPOOL_MIN = 300;
+  const TRANSPORT_PUBLIC_MIN = 200;
+  const TRANSPORT_PUBLIC_MAX_TRANSIT = 100;
+  const TRANSPORT_WALK_MIN = 100;
+  const TRANSPORT_WFH_MIN = 400;
+
+  // ── Condition thresholds — flights ──────────────────────────────
+  const FLIGHTS_LONGHAUL_MIN = 500;
+  const FLIGHTS_ECONOMY_MIN = 300;
+  const FLIGHTS_OFFSET_MIN = 100;
+
+  // ── Condition thresholds — energy ───────────────────────────────
+  const ENERGY_RENEWABLE_MIN = 300;
+  const ENERGY_LED_MIN = 200;
+  const ENERGY_AC_MIN = 150;
+  const ENERGY_COOKING_MIN = 100;
+
+  // ── Condition thresholds — diet ─────────────────────────────────
+  const DIET_MEAT_MIN = 2000;
+  const DIET_PLANT_MIN = 1800;
+  const DIET_LOCAL_MIN = 1000;
+  const DIET_WASTE_MIN = 50;
+
+  // ── Condition thresholds — shopping ─────────────────────────────
+  const SHOPPING_FASHION_MIN = 100;
+  const SHOPPING_ELECTRONICS_MIN = 50;
+  const SHOPPING_ONLINE_MIN = 30;
+
+  // ── Defaults ────────────────────────────────────────────────────
+  const DEFAULT_MAX_INSIGHTS = 6;
+  const EXPANDED_MAX_INSIGHTS = 10;
+  const HIGH_IMPACT_COUNT = 3;
 
   /**
    * Master library of all possible insights/recommendations.
    * Each insight has: id, category, condition function, priority, title, description,
    * impact (kg CO2e saved/year if action taken), difficulty, and tags.
+   * @type {InsightDefinition[]}
    */
-  var INSIGHT_LIBRARY = [
+  const INSIGHT_LIBRARY = [
     // ---- TRANSPORT INSIGHTS ----
     {
       id: 'transport_switch_ev',
@@ -28,7 +92,7 @@ var CarbonInsights = (function () {
       icon: '⚡',
       tags: ['transport', 'high-impact'],
       condition: function (r) {
-        return r.breakdown.transport.car > 500;
+        return r.breakdown.transport.car > TRANSPORT_EV_MIN;
       },
     },
     {
@@ -44,7 +108,7 @@ var CarbonInsights = (function () {
       icon: '🚗',
       tags: ['transport', 'social'],
       condition: function (r) {
-        return r.breakdown.transport.car > 300;
+        return r.breakdown.transport.car > TRANSPORT_CARPOOL_MIN;
       },
     },
     {
@@ -60,7 +124,7 @@ var CarbonInsights = (function () {
       icon: '🚌',
       tags: ['transport', 'medium-impact'],
       condition: function (r) {
-        return r.breakdown.transport.car > 200 && r.breakdown.transport.publicTransit < 100;
+        return r.breakdown.transport.car > TRANSPORT_PUBLIC_MIN && r.breakdown.transport.publicTransit < TRANSPORT_PUBLIC_MAX_TRANSIT;
       },
     },
     {
@@ -76,7 +140,7 @@ var CarbonInsights = (function () {
       icon: '🚴',
       tags: ['transport', 'health'],
       condition: function (r) {
-        return r.breakdown.transport.car > 100;
+        return r.breakdown.transport.car > TRANSPORT_WALK_MIN;
       },
     },
     {
@@ -92,7 +156,7 @@ var CarbonInsights = (function () {
       icon: '🏠',
       tags: ['transport', 'work'],
       condition: function (r) {
-        return r.breakdown.transport.car > 400;
+        return r.breakdown.transport.car > TRANSPORT_WFH_MIN;
       },
     },
 
@@ -110,7 +174,7 @@ var CarbonInsights = (function () {
       icon: '✈️',
       tags: ['flights', 'high-impact'],
       condition: function (r) {
-        return r.breakdown.flights.longHaul > 500;
+        return r.breakdown.flights.longHaul > FLIGHTS_LONGHAUL_MIN;
       },
     },
     {
@@ -126,7 +190,7 @@ var CarbonInsights = (function () {
       icon: '💺',
       tags: ['flights', 'easy-win'],
       condition: function (r) {
-        return r.breakdown.flights.total > 300;
+        return r.breakdown.flights.total > FLIGHTS_ECONOMY_MIN;
       },
     },
     {
@@ -142,7 +206,7 @@ var CarbonInsights = (function () {
       icon: '🌱',
       tags: ['flights', 'offset'],
       condition: function (r) {
-        return r.breakdown.flights.total > 100;
+        return r.breakdown.flights.total > FLIGHTS_OFFSET_MIN;
       },
     },
 
@@ -160,7 +224,7 @@ var CarbonInsights = (function () {
       icon: '☀️',
       tags: ['energy', 'high-impact', 'investment'],
       condition: function (r) {
-        return r.breakdown.energy.electricity > 300;
+        return r.breakdown.energy.electricity > ENERGY_RENEWABLE_MIN;
       },
     },
     {
@@ -176,7 +240,7 @@ var CarbonInsights = (function () {
       icon: '💡',
       tags: ['energy', 'cost-saving'],
       condition: function (r) {
-        return r.breakdown.energy.electricity > 200;
+        return r.breakdown.energy.electricity > ENERGY_LED_MIN;
       },
     },
     {
@@ -192,7 +256,7 @@ var CarbonInsights = (function () {
       icon: '❄️',
       tags: ['energy', 'easy-win'],
       condition: function (r) {
-        return r.breakdown.energy.electricity > 150;
+        return r.breakdown.energy.electricity > ENERGY_AC_MIN;
       },
     },
     {
@@ -208,7 +272,7 @@ var CarbonInsights = (function () {
       icon: '🍳',
       tags: ['energy', 'cooking'],
       condition: function (r) {
-        return r.breakdown.energy.cooking > 100;
+        return r.breakdown.energy.cooking > ENERGY_COOKING_MIN;
       },
     },
 
@@ -226,7 +290,7 @@ var CarbonInsights = (function () {
       icon: '🥗',
       tags: ['diet', 'high-impact', 'health'],
       condition: function (r) {
-        return r.breakdown.diet.diet > 2000;
+        return r.breakdown.diet.diet > DIET_MEAT_MIN;
       },
     },
     {
@@ -242,7 +306,7 @@ var CarbonInsights = (function () {
       icon: '🌿',
       tags: ['diet', 'high-impact'],
       condition: function (r) {
-        return r.breakdown.diet.diet > 1800;
+        return r.breakdown.diet.diet > DIET_PLANT_MIN;
       },
     },
     {
@@ -258,7 +322,7 @@ var CarbonInsights = (function () {
       icon: '🥬',
       tags: ['diet', 'easy-win', 'local'],
       condition: function (r) {
-        return r.breakdown.diet.diet > 1000;
+        return r.breakdown.diet.diet > DIET_LOCAL_MIN;
       },
     },
     {
@@ -274,7 +338,7 @@ var CarbonInsights = (function () {
       icon: '♻️',
       tags: ['diet', 'waste', 'easy-win'],
       condition: function (r) {
-        return r.breakdown.diet.foodWaste > 50;
+        return r.breakdown.diet.foodWaste > DIET_WASTE_MIN;
       },
     },
 
@@ -292,7 +356,7 @@ var CarbonInsights = (function () {
       icon: '👕',
       tags: ['shopping', 'fashion'],
       condition: function (r) {
-        return r.breakdown.shopping.clothing > 100;
+        return r.breakdown.shopping.clothing > SHOPPING_FASHION_MIN;
       },
     },
     {
@@ -308,7 +372,7 @@ var CarbonInsights = (function () {
       icon: '📱',
       tags: ['shopping', 'electronics'],
       condition: function (r) {
-        return r.breakdown.shopping.electronics > 50;
+        return r.breakdown.shopping.electronics > SHOPPING_ELECTRONICS_MIN;
       },
     },
     {
@@ -324,7 +388,7 @@ var CarbonInsights = (function () {
       icon: '📦',
       tags: ['shopping', 'easy-win'],
       condition: function (r) {
-        return r.breakdown.shopping.online > 30;
+        return r.breakdown.shopping.online > SHOPPING_ONLINE_MIN;
       },
     },
   ];
@@ -333,37 +397,37 @@ var CarbonInsights = (function () {
    * Generates a personalized list of insights based on calculation results.
    * @param {Object} calculationResult - Result from CarbonCalculator.calculate().
    * @param {number} [maxInsights=6] - Maximum number of insights to return.
-   * @returns {Array} Sorted array of applicable insight objects.
+   * @returns {EnrichedInsight[]} Sorted array of applicable insight objects.
    */
   function generateInsights(calculationResult, maxInsights) {
     if (!calculationResult || !calculationResult.breakdown) return [];
-    maxInsights = maxInsights || 6;
+    maxInsights = maxInsights || DEFAULT_MAX_INSIGHTS;
 
-    var applicable = INSIGHT_LIBRARY.filter(function (insight) {
+    const applicable = INSIGHT_LIBRARY.filter(function (insight) {
       try {
         return insight.condition(calculationResult);
-      } catch (e) {
+      } catch (_err) {
         return false;
       }
     });
 
     // Sort by priority (descending), then by potential impact
     applicable.sort(function (a, b) {
-      var priorityDiff = b.priority - a.priority;
+      const priorityDiff = b.priority - a.priority;
       if (priorityDiff !== 0) return priorityDiff;
       try {
         return b.impact(calculationResult) - a.impact(calculationResult);
-      } catch (e) {
+      } catch (_err) {
         return 0;
       }
     });
 
     // Add computed impact to each insight
-    var enriched = applicable.slice(0, maxInsights).map(function (insight) {
-      var impactKg = 0;
+    const enriched = applicable.slice(0, maxInsights).map(function (insight) {
+      let impactKg = 0;
       try {
         impactKg = insight.impact(calculationResult);
-      } catch (e) {
+      } catch (_err) {
         impactKg = 0;
       }
       return {
@@ -392,7 +456,11 @@ var CarbonInsights = (function () {
    * @returns {string} Motivational message.
    */
   function getMotivationalMessage(rating, total) {
-    var messages = {
+    if (!rating || typeof total !== 'number') {
+      return 'Track your carbon footprint to get personalized motivation!';
+    }
+
+    const messages = {
       excellent: [
         'Outstanding! You are leading the way to a sustainable future. 🌟',
         'Your carbon footprint is genuinely impressive — you\'re in the top tier of eco-conscious individuals!',
@@ -420,43 +488,46 @@ var CarbonInsights = (function () {
       ],
     };
 
-    var level = rating.level;
-    var pool = messages[level] || messages.moderate;
-    var idx = Math.floor(total % pool.length);
+    const level = rating.level;
+    const pool = messages[level] || messages.moderate;
+    const idx = Math.floor(Math.abs(total) % pool.length);
     return pool[idx];
   }
 
   /**
    * Gets quick wins — easy difficulty insights only.
+   * @deprecated Not used by any external module. Will be removed in v2.0.0.
    * @param {Object} calculationResult - Result from CarbonCalculator.calculate().
-   * @returns {Array} Easy-difficulty insights.
+   * @returns {EnrichedInsight[]} Easy-difficulty insights.
    */
   function getQuickWins(calculationResult) {
-    return generateInsights(calculationResult, 10).filter(function (i) {
+    return generateInsights(calculationResult, EXPANDED_MAX_INSIGHTS).filter(function (i) {
       return i.difficulty === 'easy';
     });
   }
 
   /**
    * Gets high-impact insights (top 3 by impact kg).
+   * @deprecated Not used by any external module. Will be removed in v2.0.0.
    * @param {Object} calculationResult - Result from CarbonCalculator.calculate().
-   * @returns {Array} Top impact insights.
+   * @returns {EnrichedInsight[]} Top impact insights.
    */
   function getHighImpact(calculationResult) {
-    return generateInsights(calculationResult, 10)
+    return generateInsights(calculationResult, EXPANDED_MAX_INSIGHTS)
       .sort(function (a, b) { return b.impactKg - a.impactKg; })
-      .slice(0, 3);
+      .slice(0, HIGH_IMPACT_COUNT);
   }
 
   /**
    * Generates a weekly challenge suggestion.
+   * @deprecated Not used by any external module. Will be removed in v2.0.0.
    * @param {Object} calculationResult - Result from CarbonCalculator.calculate().
-   * @returns {Object} A single challenge insight.
+   * @returns {EnrichedInsight|null} A single challenge insight.
    */
   function getWeeklyChallenge(calculationResult) {
-    var quickWins = getQuickWins(calculationResult);
+    const quickWins = getQuickWins(calculationResult);
     if (quickWins.length > 0) return quickWins[0];
-    var allInsights = generateInsights(calculationResult, 10);
+    const allInsights = generateInsights(calculationResult, EXPANDED_MAX_INSIGHTS);
     return allInsights[0] || null;
   }
 
@@ -464,9 +535,9 @@ var CarbonInsights = (function () {
   return {
     generateInsights: generateInsights,
     getMotivationalMessage: getMotivationalMessage,
-    getQuickWins: getQuickWins,
-    getHighImpact: getHighImpact,
-    getWeeklyChallenge: getWeeklyChallenge,
+    /** @deprecated */ getQuickWins: getQuickWins,
+    /** @deprecated */ getHighImpact: getHighImpact,
+    /** @deprecated */ getWeeklyChallenge: getWeeklyChallenge,
     INSIGHT_LIBRARY: INSIGHT_LIBRARY,
   };
 })();
